@@ -1,0 +1,9 @@
+{
+  "id": "simple-board",
+  "name": "Simple Board",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "轻量看板：单文件 Markdown 存储，块 id 标记卡片，指针拖拽、多选批量移动、过滤，跟随主题配色。",
+  "author": "wenxin",
+  "isDesktopOnly": true
+}
