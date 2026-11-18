@@ -1,5 +1,5 @@
-import { Plugin, TFile, normalizePath } from "obsidian";
-import { BOARD_MARKER } from "./board/model";
+import { MarkdownView, Plugin, TFile, normalizePath } from "obsidian";
+import { BOARD_MARKER_KEY, BOARD_MARKER_VALUE, isBoardFrontmatter } from "./board/model";
 import { genId } from "./board/parse";
 import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
 import { BoardView, VIEW_TYPE_BOARD } from "./view";
@@ -7,6 +7,8 @@ import { BoardView, VIEW_TYPE_BOARD } from "./view";
 export default class SimpleBoardPlugin extends Plugin {
   override settings: BoardSettings = { ...DEFAULT_SETTINGS };
   private switching = false;
+  /** 用户明确要求用 Markdown 打开的文件，别再自动切回看板。 */
+  private markdownPref = new Set<string>();
 
   override async onload(): Promise<void> {
     await this.loadSettings();
@@ -21,7 +23,7 @@ export default class SimpleBoardPlugin extends Plugin {
     });
     this.addCommand({
       id: "open-as-board",
-      name: "以看板视图打开当前笔记",
+      name: "打开为看板",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
         if (!file || file.extension !== "md") return false;
@@ -29,11 +31,46 @@ export default class SimpleBoardPlugin extends Plugin {
         return true;
       },
     });
+    this.addCommand({
+      id: "open-as-markdown",
+      name: "打开为 Markdown",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension !== "md") return false;
+        if (!checking) void this.openAsMarkdown(file);
+        return true;
+      },
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        menu.addItem((item) =>
+          item
+            .setTitle("打开为看板")
+            .setIcon("layout-dashboard")
+            .onClick(() => void this.openAsBoard(file)),
+        );
+        menu.addItem((item) =>
+          item
+            .setTitle("打开为 Markdown")
+            .setIcon("file-text")
+            .onClick(() => void this.openAsMarkdown(file)),
+        );
+      }),
+    );
 
     this.addSettingTab(new BoardSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(() => {
       this.registerEvent(this.app.workspace.on("file-open", (file) => void this.maybeOpenBoard(file)));
+      // 启动时 file-open 可能早于 frontmatter 解析完成，换叶子时再补一次
+      this.registerEvent(
+        this.app.workspace.on("active-leaf-change", () =>
+          void this.maybeOpenBoard(this.app.workspace.getActiveFile()),
+        ),
+      );
+      void this.maybeOpenBoard(this.app.workspace.getActiveFile());
     });
   }
 
@@ -60,7 +97,7 @@ export default class SimpleBoardPlugin extends Plugin {
     const path = this.uniquePath(folder, "未命名看板");
     const content = [
       "---",
-      `${BOARD_MARKER}: true`,
+      `${BOARD_MARKER_KEY}: ${BOARD_MARKER_VALUE}`,
       "---",
       "",
       "## 待办",
@@ -76,7 +113,8 @@ export default class SimpleBoardPlugin extends Plugin {
     await this.openAsBoard(file);
   }
 
-  private async openAsBoard(file: TFile): Promise<void> {
+  async openAsBoard(file: TFile): Promise<void> {
+    this.markdownPref.delete(file.path);
     this.switching = true;
     try {
       const leaf = this.app.workspace.getLeaf(false);
@@ -86,13 +124,25 @@ export default class SimpleBoardPlugin extends Plugin {
     }
   }
 
+  async openAsMarkdown(file: TFile): Promise<void> {
+    this.markdownPref.add(file.path);
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.setViewState({
+      type: "markdown",
+      state: { file: file.path, mode: "source", source: true },
+      active: true,
+    });
+  }
+
   private async maybeOpenBoard(file: TFile | null): Promise<void> {
     if (!file || file.extension !== "md" || !this.settings.autoOpen || this.switching) return;
+    if (this.markdownPref.has(file.path)) return;
     const leaf = this.app.workspace.getLeaf(false);
     if (!leaf) return;
     const type = leaf.view.getViewType();
     if (type === VIEW_TYPE_BOARD || type !== "markdown") return;
-    if (this.app.metadataCache.getFileCache(file)?.frontmatter?.[BOARD_MARKER] !== true) return;
+    if ((leaf.view as MarkdownView).file?.path !== file.path) return;
+    if (!isBoardFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter)) return;
     await this.openAsBoard(file);
   }
 

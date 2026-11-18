@@ -11,7 +11,7 @@ import {
   toggleDone,
 } from "../src/board/ops";
 import { cardMatches, cardTags, stripTags } from "../src/board/filter";
-import { allCards, findCard, isCard, type BoardDoc } from "../src/board/model";
+import { allCards, findCard, isBoardFrontmatter, isCard, type BoardDoc } from "../src/board/model";
 
 const SAMPLE = [
   "---",
@@ -75,6 +75,17 @@ describe("parse / serialize", () => {
     expect(serializeDoc(parseDoc(messy))).toBe(
       ["## A", "- [ ] 一 ^aaa111", "- [ ] 二 ^bbb222", "", "## B", "- [ ] 三 ^ccc333", ""].join("\n"),
     );
+  });
+});
+
+describe("文档标记", () => {
+  it("认新标记，也认早期的 board: true", () => {
+    expect(isBoardFrontmatter({ kanban: "simple-board" })).toBe(true);
+    expect(isBoardFrontmatter({ board: true })).toBe(true);
+    expect(isBoardFrontmatter({ kanban: "other" })).toBe(false);
+    expect(isBoardFrontmatter({ board: "true" })).toBe(false);
+    expect(isBoardFrontmatter({})).toBe(false);
+    expect(isBoardFrontmatter(undefined)).toBe(false);
   });
 });
 

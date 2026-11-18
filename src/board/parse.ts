@@ -124,6 +124,4 @@ function readCard(
   };
 }
 
-export function boardHasMarker(frontmatter: Record<string, unknown> | undefined): boolean {
-  return frontmatter?.["board"] === true;
-}
+export { isBoardFrontmatter } from "./model";

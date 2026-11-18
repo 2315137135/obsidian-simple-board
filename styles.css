@@ -502,15 +502,17 @@
   background: var(--background-primary);
   border-left: 1px solid var(--background-modifier-border);
   box-shadow: -10px 0 30px rgb(0 0 0 / 8%);
-  opacity: 0;
+  /* 只做位移，不做透明度：半透明期间会透出下面的看板，看着像整页在渐入 */
+  visibility: hidden;
   transform: translateX(101%);
-  transition: transform 160ms ease-out, opacity 160ms ease-out;
+  transition: transform 160ms ease-out, visibility 0s linear 160ms;
   pointer-events: none;
 }
 
 .sb-peek.is-open {
-  opacity: 1;
+  visibility: visible;
   transform: translateX(0);
+  transition: transform 160ms ease-out, visibility 0s;
   pointer-events: auto;
 }
 

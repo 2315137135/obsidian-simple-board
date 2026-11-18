@@ -98,6 +98,10 @@ export class BoardView extends FileView {
   // ================ 生命周期 ================
 
   override async onOpen(): Promise<void> {
+    this.addAction("file-code", "打开为 Markdown", () => {
+      const file = this.file;
+      if (file) void this.plugin.openAsMarkdown(file);
+    });
     this.buildShell();
     this.filter.hideDone = this.plugin.settings.hideDoneDefault;
     this.gesturesOff = installGestures({

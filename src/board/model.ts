@@ -14,7 +14,17 @@
  * 保证不装插件时仍是正常 Markdown，也保证插件不会重排用户手写的格式。
  */
 
-export const BOARD_MARKER = "board";
+/** 看板文件在 frontmatter 里的标记：`kanban: simple-board`。 */
+export const BOARD_MARKER_KEY = "kanban";
+export const BOARD_MARKER_VALUE = "simple-board";
+/** 早期文件用的是 `board: true`，继续认。 */
+export const LEGACY_MARKER_KEY = "board";
+
+export function isBoardFrontmatter(frontmatter: Record<string, unknown> | undefined): boolean {
+  if (!frontmatter) return false;
+  if (frontmatter[BOARD_MARKER_KEY] === BOARD_MARKER_VALUE) return true;
+  return frontmatter[LEGACY_MARKER_KEY] === true;
+}
 
 export interface RawLine {
   kind: "raw";
