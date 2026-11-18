@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { parseDoc } from "../src/board/parse";
 import { serializeDoc } from "../src/board/serialize";
-import { clearDone, deleteCards, moveCards, setCardContent, toggleDone } from "../src/board/ops";
+import {
+  bodyForEditing,
+  clearDone,
+  deleteCards,
+  moveCards,
+  setCardBody,
+  setCardTitle,
+  toggleDone,
+} from "../src/board/ops";
 import { cardMatches, cardTags, stripTags } from "../src/board/filter";
 import { allCards, findCard, isCard, type BoardDoc } from "../src/board/model";
 
@@ -45,7 +53,7 @@ describe("parse / serialize", () => {
     const doc = parseDoc(SAMPLE);
     const card = allCards(doc)[1];
     expect(card.persisted).toBe(false);
-    setCardContent(card, "给甲方发确认单（已改）");
+    setCardTitle(card, "给甲方发确认单（已改）");
     const text = serializeDoc(doc);
     expect(text).toContain(`- [ ] 给甲方发确认单（已改） ^${card.id}`);
     expect(text).toContain("- [ ] 整理索引文档 ^a1b2c3");
@@ -107,18 +115,23 @@ describe("ops", () => {
     expect(serializeDoc(doc).startsWith("---\nboard: true\n---")).toBe(true);
   });
 
-  it("未改动时 setCardContent 返回 false", () => {
+  it("标题与正文分别写回", () => {
     const doc = parseDoc(SAMPLE);
     const card = allCards(doc)[0];
-    expect(setCardContent(card, card.text)).toBe(false);
-    expect(setCardContent(card, "改了")).toBe(true);
+    expect(setCardTitle(card, card.text)).toBe(false);
+    expect(setCardTitle(card, "改了标题")).toBe(true);
+    expect(setCardBody(card, "第一行正文\n第二行")).toBe(true);
+    const text = serializeDoc(doc);
+    expect(text).toContain("- [ ] 改了标题 ^a1b2c3\n\t第一行正文\n\t第二行");
+    expect(setCardBody(card, "第一行正文\n第二行")).toBe(false);
+    expect(bodyForEditing(card)).toBe("第一行正文\n第二行");
   });
 });
 
 describe("filter", () => {
   const doc = parseDoc(SAMPLE);
   const card = allCards(doc)[0];
-  setCardContent(card, "整理索引文档 #文档");
+  setCardTitle(card, "整理索引文档 #文档");
 
   it("标签与文本都能筛", () => {
     expect(cardTags(card)).toEqual(["#文档"]);

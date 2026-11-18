@@ -4,6 +4,7 @@
   --sb-column-width: 272px;
   --sb-gap: 8px;
   --sb-transition: 150ms ease-out;
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -183,6 +184,7 @@
 /* ================ 卡片 ================ */
 
 .sb-card {
+  position: relative;
   display: flex;
   gap: 8px;
   padding: 8px 10px;
@@ -434,4 +436,246 @@
 
 .sb-density-single .sb-check {
   margin-top: 0;
+}
+
+/* ================ 卡片上的打开入口 ================ */
+
+.sb-card-open {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-faint);
+  background: var(--background-secondary);
+  border: none;
+  border-radius: var(--radius-s);
+  box-shadow: none;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--sb-transition), color var(--sb-transition);
+}
+
+.sb-card:hover .sb-card-open,
+.sb-card-open:focus-visible {
+  opacity: 1;
+}
+
+.sb-card-open:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.sb-card-open svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ================ 卡片覆盖层 ================ */
+
+.sb-peek-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: none;
+}
+
+.sb-peek-backdrop.is-open {
+  display: block;
+}
+
+.sb-peek {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 92%);
+  padding: 16px 20px 28px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border-left: 1px solid var(--background-modifier-border);
+  box-shadow: -10px 0 30px rgb(0 0 0 / 8%);
+  opacity: 0;
+  transform: translateX(101%);
+  transition: transform 160ms ease-out, opacity 160ms ease-out;
+  pointer-events: none;
+}
+
+.sb-peek.is-open {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.sb-peek-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.sb-peek-crumb {
+  flex: 1 1 auto;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.sb-peek-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-s);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.sb-peek-close:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.sb-peek-close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sb-peek-title {
+  width: 100%;
+  padding: 2px 0;
+  overflow: hidden;
+  font-size: 1.4em;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-normal);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  resize: none;
+}
+
+.sb-peek-title:focus,
+.sb-peek-body:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.sb-props {
+  display: grid;
+  gap: 2px;
+  margin: 14px 0 4px;
+}
+
+.sb-prop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.sb-prop-label {
+  flex: 0 0 64px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.sb-prop-value {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sb-prop-value .dropdown {
+  width: 100%;
+}
+
+.sb-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.sb-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  border-radius: var(--radius-s);
+}
+
+.sb-tag-remove {
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.sb-tag-remove:hover {
+  color: var(--text-normal);
+}
+
+.sb-tag-input {
+  width: 120px;
+  height: 24px;
+  padding: 0 4px;
+  font-size: var(--font-ui-smaller);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-s);
+  box-shadow: none;
+}
+
+.sb-tag-input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.sb-peek-body {
+  width: 100%;
+  min-height: 140px;
+  margin-top: 14px;
+  padding: 0;
+  overflow: hidden;
+  font-size: var(--font-text-size);
+  line-height: 1.6;
+  color: var(--text-normal);
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  resize: none;
+}
+
+.sb-peek-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.sb-tool-danger:hover {
+  color: var(--text-error);
 }

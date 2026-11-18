@@ -79,14 +79,39 @@ export function toggleDone(card: Card): void {
   card.dirty = true;
 }
 
-/** 多行输入：首行是标题，其余是续行正文。 */
-export function setCardContent(card: Card, content: string): boolean {
-  const lines = content.split("\n");
-  const text = (lines[0] ?? "").trimEnd();
-  const body = lines.slice(1);
-  if (text === card.text && body.join("\n") === card.body.join("\n")) return false;
+export function setCardTitle(card: Card, title: string): boolean {
+  const text = title.trimEnd();
+  if (text === card.text) return false;
   card.text = text;
-  card.body = body;
+  card.dirty = true;
+  return true;
+}
+
+/**
+ * 正文在文件里是卡片下一级的缩进块。编辑器只面对去掉一级缩进的文本，
+ * 写回时统一补一级，这样界面里不会出现凭空多出来的制表符。
+ */
+const ONE_LEVEL = /^(?:\t| {1,4})/;
+
+function stripOneLevel(line: string, indent: string): string {
+  const withoutCardIndent = line.startsWith(indent) ? line.slice(indent.length) : line;
+  return withoutCardIndent.replace(ONE_LEVEL, "");
+}
+
+export function bodyForEditing(card: Card): string {
+  return card.body.map((line) => stripOneLevel(line, card.indent)).join("\n");
+}
+
+export function setCardBody(card: Card, body: string): boolean {
+  const raw = body.replace(/\n+$/, "");
+  const next =
+    raw === ""
+      ? []
+      : raw.split("\n").map((line) =>
+          line === "" ? "" : `${card.indent}\t${stripOneLevel(line, card.indent)}`,
+        );
+  if (next.join("\n") === card.body.join("\n")) return false;
+  card.body = next;
   card.dirty = true;
   return true;
 }

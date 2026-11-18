@@ -2,9 +2,10 @@ import { FileView, MarkdownRenderer, Menu, Notice, TFile, WorkspaceLeaf, setIcon
 import type SimpleBoardPlugin from "./main";
 import { EMPTY_FILTER, cardMatches, cardTags, stripTags, type FilterState } from "./board/filter";
 import type { BoardDoc, Card, Column } from "./board/model";
-import { findCard, isCard } from "./board/model";
+import { allCards, findCard, findColumnOf, isCard } from "./board/model";
 import {
   addColumn,
+  bodyForEditing,
   clearDone,
   deleteCards,
   insertCard,
@@ -12,15 +13,37 @@ import {
   moveCardsToAdjacentColumn,
   removeColumn,
   renameColumn,
-  setCardContent,
+  setCardBody,
+  setCardTitle,
   toggleDone,
 } from "./board/ops";
 import { newCard, parseDoc } from "./board/parse";
 import { serializeDoc } from "./board/serialize";
+import { CardEditor } from "./ui/card-editor";
 import { installGestures } from "./ui/drag";
 import type { BoardDensity } from "./settings";
 
 export const VIEW_TYPE_BOARD = "simple-board-view";
+
+/** 抽屉只读这一份投影，写入仍走 BoardView.patchCard。 */
+export interface CardSnapshot {
+  id: string;
+  title: string;
+  body: string;
+  tags: string[];
+  done: boolean;
+  columnIndex: number;
+  columnTitle: string;
+  columns: string[];
+  boardName: string;
+}
+
+export interface CardPatch {
+  title?: string;
+  body?: string;
+  done?: boolean;
+  columnIndex?: number;
+}
 
 const DENSITY_CLASS: Record<BoardDensity, string> = {
   comfortable: "sb-density-comfortable",
@@ -45,6 +68,9 @@ export class BoardView extends FileView {
   private batchEl!: HTMLElement;
   private scrollLeft = 0;
   private columnScroll = new Map<number, number>();
+  private backdropEl!: HTMLElement;
+  private peekEl!: HTMLElement;
+  private cardEditor: CardEditor | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -83,9 +109,10 @@ export class BoardView extends FileView {
         })),
       scroller: () => this.columnsEl,
       selected: () => this.selection,
-      onCardActivate: (id, additive) => {
+      onCardActivate: (id, additive, region) => {
         if (additive) this.toggleSelection(id);
-        else this.startEdit(id);
+        else if (region === "title") this.startTitleEdit(id);
+        else this.openCardDetail(id);
       },
       onDrop: (ids, columnIndex, beforeKey) => this.dropCards(ids, columnIndex, beforeKey),
     });
@@ -102,6 +129,8 @@ export class BoardView extends FileView {
     this.flushSave();
     this.gesturesOff?.();
     this.gesturesOff = null;
+    this.cardEditor?.destroy();
+    this.cardEditor = null;
   }
 
   override async onLoadFile(file: TFile): Promise<void> {
@@ -247,6 +276,23 @@ export class BoardView extends FileView {
 
     this.columnsEl = this.contentEl.createDiv({ cls: "sb-columns" });
 
+    this.backdropEl = this.contentEl.createDiv({ cls: "sb-peek-backdrop" });
+    this.backdropEl.addEventListener("click", () => this.closeDetail());
+    this.peekEl = this.contentEl.createDiv({ cls: "sb-peek" });
+    this.cardEditor = new CardEditor(this.peekEl, {
+      snapshot: (id) => this.snapshotCard(id),
+      applyPatch: (id, patch) => this.applyPatch(id, patch),
+      remove: (id) => this.deleteCard(id),
+      close: () => this.closeDetail(),
+    });
+
+    this.registerDomEvent(document, "keydown", (event) => {
+      if (event.key !== "Escape" || !this.peekEl.hasClass("is-open")) return;
+      if (this.editingId) return;
+      event.stopPropagation();
+      this.closeDetail();
+    });
+
     this.registerDomEvent(this.columnsEl, "contextmenu", (event) => {
       const cardEl = (event.target as HTMLElement | null)?.closest<HTMLElement>(".sb-card");
       if (!cardEl?.dataset.id) return;
@@ -289,6 +335,7 @@ export class BoardView extends FileView {
 
     this.renderBatch();
     this.restoreScroll();
+    if (this.detailOpen) this.cardEditor?.sync();
   }
 
   private renderColumn(column: Column, index: number): void {
@@ -337,6 +384,16 @@ export class BoardView extends FileView {
       this.toggleCardDone(card.id);
     });
 
+    const open = el.createEl("button", {
+      cls: "sb-card-open",
+      attr: { "aria-label": "打开详情", title: "打开详情" },
+    });
+    setIcon(open, "panel-right");
+    open.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.openCardDetail(card.id);
+    });
+
     const content = el.createDiv({ cls: "sb-card-content" });
     const text = content.createDiv({ cls: "sb-card-text" });
     const title = stripTags(card.text);
@@ -368,7 +425,8 @@ export class BoardView extends FileView {
     el.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        this.startEdit(card.id);
+        if (event.metaKey || event.ctrlKey) this.openCardDetail(card.id);
+        else this.startTitleEdit(card.id);
       } else if (event.key === " ") {
         event.preventDefault();
         this.toggleCardDone(card.id);
@@ -419,7 +477,8 @@ export class BoardView extends FileView {
 
   // ================ 编辑 ================
 
-  private startEdit(id: string): void {
+  /** 卡片上只改标题；正文与属性在抽屉里编。 */
+  private startTitleEdit(id: string): void {
     const doc = this.doc;
     if (!doc || this.editingId === id) return;
     this.commitEdit();
@@ -433,11 +492,10 @@ export class BoardView extends FileView {
 
     const area = document.createElement("textarea");
     area.className = "sb-card-edit";
-    area.value = [card.text, ...card.body].join("\n");
+    area.value = card.text;
     area.spellcheck = false;
     textEl.replaceWith(area);
-    // 正文与标签都已进输入框，编辑态不再重复显示
-    el?.querySelector(".sb-card-extra")?.remove();
+    // 标题输入框里已经带着标签文本，标签 chip 暂时让位
     el?.querySelector(".sb-card-meta")?.remove();
 
     const resize = (): void => {
@@ -480,7 +538,7 @@ export class BoardView extends FileView {
       return;
     }
     this.selection.delete(id);
-    if (!this.mutate(() => setCardContent(card, value))) this.render();
+    if (!this.mutate(() => setCardTitle(card, value))) this.render();
   }
 
   private cancelEdit(): void {
@@ -530,7 +588,7 @@ export class BoardView extends FileView {
     if (!doc) return;
     const card = newCard("");
     this.mutate(() => insertCard(doc, columnIndex, card));
-    this.startEdit(card.id);
+    this.startTitleEdit(card.id);
   }
 
   private toggleCardDone(id: string): void {
@@ -583,7 +641,10 @@ export class BoardView extends FileView {
     const menu = new Menu();
 
     menu.addItem((item) =>
-      item.setTitle("编辑").setIcon("pencil").onClick(() => this.startEdit(id)),
+      item.setTitle("打开详情").setIcon("panel-right").onClick(() => this.openCardDetail(id)),
+    );
+    menu.addItem((item) =>
+      item.setTitle("编辑标题").setIcon("pencil").onClick(() => this.startTitleEdit(id)),
     );
     menu.addSeparator();
     menu.addItem((item) =>
@@ -655,5 +716,103 @@ export class BoardView extends FileView {
 
   focusSearch(): void {
     this.searchEl?.focus();
+  }
+
+  // ================ 抽屉的读写接口 ================
+
+  snapshotCard(id: string): (CardSnapshot & { filePath: string }) | null {
+    const doc = this.doc;
+    const file = this.file;
+    if (!doc || !file) return null;
+    const card = findCard(doc, id);
+    if (!card) return null;
+    const columnIndex = findColumnOf(doc, id);
+    return {
+      id,
+      title: card.text,
+      body: bodyForEditing(card),
+      tags: cardTags(card),
+      done: card.done,
+      columnIndex,
+      columnTitle: doc.columns[columnIndex]?.title ?? "",
+      columns: doc.columns.map((column) => column.title),
+      boardName: file.basename,
+      filePath: file.path,
+    };
+  }
+
+  applyPatch(id: string, patch: CardPatch): void {
+    const doc = this.doc;
+    if (!doc) return;
+    const card = findCard(doc, id);
+    if (!card) return;
+    const applied = this.mutate(() => {
+      let changed = false;
+      if (patch.title !== undefined && setCardTitle(card, patch.title)) changed = true;
+      if (patch.body !== undefined && setCardBody(card, patch.body)) changed = true;
+      if (patch.done !== undefined && patch.done !== card.done) {
+        card.done = patch.done;
+        card.dirty = true;
+        changed = true;
+      }
+      if (patch.columnIndex !== undefined && patch.columnIndex !== findColumnOf(doc, card.id)) {
+        changed = moveCards(doc, [card.id], patch.columnIndex, null) || changed;
+      }
+      return changed;
+    });
+    void applied;
+  }
+
+  /** 抽屉传来的宽松 patch，字段可能一次只来一个。 */
+  patchCard(id: string, patch: Record<string, unknown>): void {
+    this.applyPatch(id, patch as CardPatch);
+  }
+
+  deleteCard(id: string): void {
+    const doc = this.doc;
+    if (!doc) return;
+    this.selection.delete(id);
+    this.mutate(() => deleteCards(doc, [id]));
+  }
+
+  openCardDetail(id: string): void {
+    const doc = this.doc;
+    if (!doc || !this.cardEditor) return;
+    this.commitEdit();
+    const card = findCard(doc, id);
+    if (!card) return;
+    // 覆盖层按块 id 认卡片；没有持久 id 的卡片先写进文件，否则重载后就对不上
+    if (!card.persisted) {
+      card.dirty = true;
+      card.persisted = true;
+      this.scheduleSave();
+    }
+    this.cardEditor.open(id);
+    this.peekEl.addClass("is-open");
+    this.backdropEl.addClass("is-open");
+    window.requestAnimationFrame(() => {
+      this.peekEl.querySelector<HTMLTextAreaElement>(".sb-peek-title")?.focus();
+    });
+  }
+
+  closeDetail(): void {
+    if (!this.peekEl) return;
+    this.cardEditor?.close();
+    this.peekEl.removeClass("is-open");
+    this.backdropEl.removeClass("is-open");
+  }
+
+  private get detailOpen(): boolean {
+    return this.peekEl?.hasClass("is-open") ?? false;
+  }
+
+  /** 供抽屉确认卡片仍在本视图里。 */
+  hasCard(id: string): boolean {
+    return this.doc ? findCard(this.doc, id) !== null : false;
+  }
+
+  /** 未使用但保留：抽屉可能要求刷新整表。 */
+  cardCount(): number {
+    return this.doc ? allCards(this.doc).length : 0;
   }
 }

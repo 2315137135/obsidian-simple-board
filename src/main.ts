@@ -1,6 +1,6 @@
 import { Plugin, TFile, normalizePath } from "obsidian";
-import { genId } from "./board/parse";
 import { BOARD_MARKER } from "./board/model";
+import { genId } from "./board/parse";
 import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
 import { BoardView, VIEW_TYPE_BOARD } from "./view";
 
@@ -49,17 +49,22 @@ export default class SimpleBoardPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
+  refreshViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BOARD)) {
+      if (leaf.view instanceof BoardView) leaf.view.applyDensity();
+    }
+  }
+
   private async createBoard(): Promise<void> {
     const folder = this.settings.newBoardFolder.trim() || this.activeFolder();
     const path = this.uniquePath(folder, "未命名看板");
-    const id = genId();
     const content = [
       "---",
       `${BOARD_MARKER}: true`,
       "---",
       "",
       "## 待办",
-      `- [ ] 第一张卡片 ^${id}`,
+      `- [ ] 第一张卡片 ^${genId()}`,
       "",
       "## 进行中",
       "",
@@ -89,12 +94,6 @@ export default class SimpleBoardPlugin extends Plugin {
     if (type === VIEW_TYPE_BOARD || type !== "markdown") return;
     if (this.app.metadataCache.getFileCache(file)?.frontmatter?.[BOARD_MARKER] !== true) return;
     await this.openAsBoard(file);
-  }
-
-  refreshViews(): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_BOARD)) {
-      if (leaf.view instanceof BoardView) leaf.view.applyDensity();
-    }
   }
 
   private activeFolder(): string {
