@@ -9,6 +9,8 @@ export default class SimpleBoardPlugin extends Plugin {
   private switching = false;
   /** 用户明确要求用 Markdown 打开的文件，别再自动切回看板。 */
   private markdownPref = new Set<string>();
+  /** 用户明确要求用看板打开、但文件里没有标记的文档，别把它顶回 Markdown。 */
+  private boardPref = new Set<string>();
 
   override async onload(): Promise<void> {
     await this.loadSettings();
@@ -115,6 +117,7 @@ export default class SimpleBoardPlugin extends Plugin {
 
   async openAsBoard(file: TFile): Promise<void> {
     this.markdownPref.delete(file.path);
+    this.boardPref.add(file.path);
     this.switching = true;
     try {
       const leaf = this.app.workspace.getLeaf(false);
@@ -126,6 +129,7 @@ export default class SimpleBoardPlugin extends Plugin {
 
   async openAsMarkdown(file: TFile): Promise<void> {
     this.markdownPref.add(file.path);
+    this.boardPref.delete(file.path);
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.setViewState({
       type: "markdown",
@@ -134,15 +138,33 @@ export default class SimpleBoardPlugin extends Plugin {
     });
   }
 
+  /** 看板与 Markdown 双向跟随：同一叶子里换文档时，视图类型要对得上。 */
   private async maybeOpenBoard(file: TFile | null): Promise<void> {
-    if (!file || file.extension !== "md" || !this.settings.autoOpen || this.switching) return;
-    if (this.markdownPref.has(file.path)) return;
+    if (!file || file.extension !== "md" || this.switching) return;
     const leaf = this.app.workspace.getLeaf(false);
     if (!leaf) return;
     const type = leaf.view.getViewType();
-    if (type === VIEW_TYPE_BOARD || type !== "markdown") return;
+    const isBoard = isBoardFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+
+    if (type === VIEW_TYPE_BOARD) {
+      // 看板叶子被拿去开别的文档：不是看板文件就退回 Markdown
+      if (isBoard || this.boardPref.has(file.path)) return;
+      this.switching = true;
+      try {
+        await leaf.setViewState({
+          type: "markdown",
+          state: { file: file.path },
+          active: true,
+        });
+      } finally {
+        this.switching = false;
+      }
+      return;
+    }
+
+    if (!this.settings.autoOpen || type !== "markdown") return;
+    if (this.markdownPref.has(file.path) || !isBoard) return;
     if ((leaf.view as MarkdownView).file?.path !== file.path) return;
-    if (!isBoardFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter)) return;
     await this.openAsBoard(file);
   }
 
