@@ -439,9 +439,9 @@
   margin-top: 0;
 }
 
-/* ================ 卡片上的打开入口 ================ */
+/* ================ 卡片上的编辑入口 ================ */
 
-.sb-card-open {
+.sb-card-edit-btn {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -461,17 +461,17 @@
   transition: opacity var(--sb-transition), color var(--sb-transition);
 }
 
-.sb-card:hover .sb-card-open,
-.sb-card-open:focus-visible {
+.sb-card:hover .sb-card-edit-btn,
+.sb-card-edit-btn:focus-visible {
   opacity: 1;
 }
 
-.sb-card-open:hover {
+.sb-card-edit-btn:hover {
   color: var(--text-normal);
   background: var(--background-modifier-hover);
 }
 
-.sb-card-open svg {
+.sb-card-edit-btn svg {
   width: 13px;
   height: 13px;
 }

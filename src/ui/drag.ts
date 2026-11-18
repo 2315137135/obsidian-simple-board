@@ -1,5 +1,5 @@
 /**
- * 卡片手势：点击进入编辑、修饰键多选、指针拖拽跨列。
+ * 卡片手势：点击开合侧栏、修饰键多选、指针拖拽跨列。
  * 用 Pointer Events 而非 HTML5 拖放，落点用真实 DOM 占位缝表示，布局不跳。
  */
 
@@ -13,17 +13,13 @@ export interface DragHost {
   columns(): DragColumn[];
   scroller(): HTMLElement | null;
   selected(): ReadonlySet<string>;
-  onCardActivate(id: string, additive: boolean, region: CardRegion): void;
+  onCardActivate(id: string, additive: boolean): void;
   onDrop(ids: string[], columnIndex: number, beforeKey: string | null): void;
 }
-
-/** 卡片上不同区域的手感不同：标题就地改，正文与空白处开抽屉。 */
-export type CardRegion = "title" | "body" | "card";
 
 interface Press {
   id: string;
   cardEl: HTMLElement;
-  region: CardRegion;
   startX: number;
   startY: number;
 }
@@ -54,7 +50,6 @@ export function installGestures(host: DragHost): () => void {
     press = {
       id: cardEl.dataset.id ?? "",
       cardEl,
-      region: readRegion(target),
       startX: event.clientX,
       startY: event.clientY,
     };
@@ -83,11 +78,7 @@ export function installGestures(host: DragHost): () => void {
 
     if (!active) {
       if (released) {
-        host.onCardActivate(
-          released.id,
-          event.shiftKey || event.metaKey || event.ctrlKey,
-          released.region,
-        );
+        host.onCardActivate(released.id, event.shiftKey || event.metaKey || event.ctrlKey);
       }
       reset();
       return;
@@ -133,12 +124,6 @@ export function installGestures(host: DragHost): () => void {
     if (drag) finish(drag);
     reset();
   };
-}
-
-function readRegion(target: HTMLElement): CardRegion {
-  if (target.closest(".sb-card-text")) return "title";
-  if (target.closest(".sb-card-extra, .sb-card-meta")) return "body";
-  return "card";
 }
 
 function beginDrag(host: DragHost, press: Press, event: PointerEvent): Drag {

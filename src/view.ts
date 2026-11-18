@@ -112,10 +112,10 @@ export class BoardView extends FileView {
         })),
       scroller: () => this.columnsEl,
       selected: () => this.selection,
-      onCardActivate: (id, additive, region) => {
+      onCardActivate: (id, additive) => {
         if (additive) this.toggleSelection(id);
-        // 覆盖层开着时，点任何一张卡都切到那张卡（含标题区），不要在底下改标题
-        else if (region === "title" && !this.detailOpen) this.startTitleEdit(id);
+        // 再点一次同一张卡就收起侧栏
+        else if (this.detailOpen && this.cardEditor?.openCardId === id) this.closeDetail();
         else this.openCardDetail(id);
       },
       onDrop: (ids, columnIndex, beforeKey) => this.dropCards(ids, columnIndex, beforeKey),
@@ -403,14 +403,14 @@ export class BoardView extends FileView {
       this.toggleCardDone(card.id);
     });
 
-    const open = el.createEl("button", {
-      cls: "sb-card-open",
-      attr: { "aria-label": "打开详情", title: "打开详情" },
+    const edit = el.createEl("button", {
+      cls: "sb-card-edit-btn",
+      attr: { "aria-label": "编辑标题", title: "编辑标题" },
     });
-    setIcon(open, "panel-right");
-    open.addEventListener("click", (event) => {
+    setIcon(edit, "pencil");
+    edit.addEventListener("click", (event) => {
       event.stopPropagation();
-      this.openCardDetail(card.id);
+      this.startTitleEdit(card.id);
     });
 
     const content = el.createDiv({ cls: "sb-card-content" });
@@ -442,10 +442,12 @@ export class BoardView extends FileView {
     }
 
     el.addEventListener("keydown", (event) => {
+      // 只响应卡片自己的按键，别把输入框里的 Backspace 当成删卡片
+      if (event.target !== el) return;
       if (event.key === "Enter") {
         event.preventDefault();
-        if (event.metaKey || event.ctrlKey) this.openCardDetail(card.id);
-        else this.startTitleEdit(card.id);
+        if (event.metaKey || event.ctrlKey) this.startTitleEdit(card.id);
+        else this.openCardDetail(card.id);
       } else if (event.key === " ") {
         event.preventDefault();
         this.toggleCardDone(card.id);
@@ -496,7 +498,7 @@ export class BoardView extends FileView {
 
   // ================ 编辑 ================
 
-  /** 卡片上只改标题；正文与属性在抽屉里编。 */
+  /** 卡片上只改标题（不含标签）；正文、标签与属性在侧栏里编。 */
   private startTitleEdit(id: string): void {
     const doc = this.doc;
     if (!doc || this.editingId === id) return;
@@ -511,11 +513,10 @@ export class BoardView extends FileView {
 
     const area = document.createElement("textarea");
     area.className = "sb-card-edit";
-    area.value = card.text;
+    // 输入框里只有标题，标签仍由下面的 chip 行显示，写回时再拼起来
+    area.value = stripTags(card.text);
     area.spellcheck = false;
     textEl.replaceWith(area);
-    // 标题输入框里已经带着标签文本，标签 chip 暂时让位
-    el?.querySelector(".sb-card-meta")?.remove();
 
     const resize = (): void => {
       area.style.height = "auto";
@@ -557,7 +558,8 @@ export class BoardView extends FileView {
       return;
     }
     this.selection.delete(id);
-    if (!this.mutate(() => setCardTitle(card, value))) this.render();
+    const composed = [stripTags(value), ...cardTags(card)].filter(Boolean).join(" ");
+    if (!this.mutate(() => setCardTitle(card, composed))) this.render();
   }
 
   private cancelEdit(): void {
@@ -660,7 +662,10 @@ export class BoardView extends FileView {
     const menu = new Menu();
 
     menu.addItem((item) =>
-      item.setTitle("打开详情").setIcon("panel-right").onClick(() => this.openCardDetail(id)),
+      item.setTitle("打开/关闭详情").setIcon("panel-right").onClick(() => {
+        if (this.cardEditor?.openCardId === id) this.closeDetail();
+        else this.openCardDetail(id);
+      }),
     );
     menu.addItem((item) =>
       item.setTitle("编辑标题").setIcon("pencil").onClick(() => this.startTitleEdit(id)),
