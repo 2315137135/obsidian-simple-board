@@ -614,41 +614,71 @@
 .sb-tag {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px 4px 2px 8px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-  background: var(--background-modifier-hover);
-  border-radius: var(--radius-s);
+  gap: 3px;
+  height: 22px;
+  padding: 0 3px 0 8px;
+  font-size: var(--tag-size, var(--font-ui-smaller));
+  line-height: 1;
+  color: var(--tag-color, var(--text-muted));
+  background: var(--tag-background, var(--background-modifier-hover));
+  border-radius: var(--tag-radius, var(--radius-s));
 }
 
 .sb-tag-remove {
-  padding: 0 2px;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  color: inherit;
   background: transparent;
   border: none;
+  border-radius: 50%;
   box-shadow: none;
+  opacity: 0.45;
   cursor: pointer;
+  transition: opacity 120ms ease-out, background 120ms ease-out;
+}
+
+.sb-tag:hover .sb-tag-remove,
+.sb-tag-remove:focus-visible {
+  opacity: 1;
 }
 
 .sb-tag-remove:hover {
-  color: var(--text-normal);
+  background: var(--background-modifier-border);
 }
 
-.sb-tag-input {
-  width: 120px;
-  height: 24px;
-  padding: 0 4px;
-  font-size: var(--font-ui-smaller);
+.sb-tag-remove svg {
+  width: 9px;
+  height: 9px;
+  stroke-width: 2.5;
+}
+
+input.sb-tag-input {
+  width: 96px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: var(--tag-size, var(--font-ui-smaller));
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-s);
   box-shadow: none;
+  transition: background 120ms ease-out, border-color 120ms ease-out;
 }
 
-.sb-tag-input:focus {
+input.sb-tag-input::placeholder {
+  color: var(--text-faint);
+}
+
+input.sb-tag-input:hover {
+  background: var(--background-modifier-hover);
+}
+
+input.sb-tag-input:focus {
+  background: var(--background-primary);
+  border-color: var(--interactive-accent);
   outline: none;
   box-shadow: none;
 }

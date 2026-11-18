@@ -188,7 +188,7 @@ export class CardEditor {
         cls: "sb-tag-remove",
         attr: { "aria-label": `移除 ${tag}` },
       });
-      close.textContent = "×";
+      setIcon(close, "x");
       close.addEventListener("click", () => this.removeTag(tag));
     }
     this.tagsEl.appendChild(this.tagInputEl);
