@@ -68,7 +68,6 @@ export class BoardView extends FileView {
   private batchEl!: HTMLElement;
   private scrollLeft = 0;
   private columnScroll = new Map<number, number>();
-  private backdropEl!: HTMLElement;
   private peekEl!: HTMLElement;
   private cardEditor: CardEditor | null = null;
 
@@ -115,7 +114,8 @@ export class BoardView extends FileView {
       selected: () => this.selection,
       onCardActivate: (id, additive, region) => {
         if (additive) this.toggleSelection(id);
-        else if (region === "title") this.startTitleEdit(id);
+        // 覆盖层开着时，点任何一张卡都切到那张卡（含标题区），不要在底下改标题
+        else if (region === "title" && !this.detailOpen) this.startTitleEdit(id);
         else this.openCardDetail(id);
       },
       onDrop: (ids, columnIndex, beforeKey) => this.dropCards(ids, columnIndex, beforeKey),
@@ -280,8 +280,6 @@ export class BoardView extends FileView {
 
     this.columnsEl = this.contentEl.createDiv({ cls: "sb-columns" });
 
-    this.backdropEl = this.contentEl.createDiv({ cls: "sb-peek-backdrop" });
-    this.backdropEl.addEventListener("click", () => this.closeDetail());
     this.peekEl = this.contentEl.createDiv({ cls: "sb-peek" });
     this.cardEditor = new CardEditor(this.peekEl, {
       snapshot: (id) => this.snapshotCard(id),
@@ -296,6 +294,23 @@ export class BoardView extends FileView {
       event.stopPropagation();
       this.closeDetail();
     });
+
+    // 不用遮罩层：遮罩会吃掉卡片 hover，面板一开卡片就掉高亮，看着像卡片在动。
+    // 改成捕获阶段的 pointerdown 判定，点面板外任意处收起。
+    this.registerDomEvent(
+      document,
+      "pointerdown",
+      (event) => {
+        if (!this.peekEl?.hasClass("is-open")) return;
+        const target = event.target as HTMLElement | null;
+        if (!target) return;
+        if (this.peekEl.contains(target)) return;
+        // 点卡片交给卡片自己的逻辑：换标题或在覆盖层里切换卡片，不闪一次开合
+        if (target.closest(".sb-card")) return;
+        this.closeDetail();
+      },
+      true,
+    );
 
     this.registerDomEvent(this.columnsEl, "contextmenu", (event) => {
       const cardEl = (event.target as HTMLElement | null)?.closest<HTMLElement>(".sb-card");
@@ -793,9 +808,13 @@ export class BoardView extends FileView {
     }
     this.cardEditor.open(id);
     this.peekEl.addClass("is-open");
-    this.backdropEl.addClass("is-open");
     window.requestAnimationFrame(() => {
-      this.peekEl.querySelector<HTMLTextAreaElement>(".sb-peek-title")?.focus();
+      // preventScroll：否则聚焦会把 overflow 容器滚一下，整个看板会横向错位
+      this.peekEl
+        .querySelector<HTMLTextAreaElement>(".sb-peek-title")
+        ?.focus({ preventScroll: true });
+      this.rootEl.scrollLeft = 0;
+      this.rootEl.scrollTop = 0;
     });
   }
 
@@ -803,7 +822,6 @@ export class BoardView extends FileView {
     if (!this.peekEl) return;
     this.cardEditor?.close();
     this.peekEl.removeClass("is-open");
-    this.backdropEl.removeClass("is-open");
   }
 
   private get detailOpen(): boolean {

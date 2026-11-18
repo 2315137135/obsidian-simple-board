@@ -9,7 +9,8 @@
   flex-direction: column;
   height: 100%;
   padding: 0 !important;
-  overflow: hidden;
+  /* clip 而不是 hidden：hidden 仍可被脚本/聚焦滚动，覆盖层一开看板会横向错位 */
+  overflow: clip;
 }
 
 /* ================ 工具条 ================ */
@@ -476,17 +477,6 @@
 }
 
 /* ================ 卡片覆盖层 ================ */
-
-.sb-peek-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  display: none;
-}
-
-.sb-peek-backdrop.is-open {
-  display: block;
-}
 
 .sb-peek {
   position: absolute;
