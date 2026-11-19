@@ -20,6 +20,7 @@ import {
   insertCard,
   moveCards,
   moveCardsToAdjacentColumn,
+  moveColumn,
   removeColumn,
   renameColumn,
   setCardBody,
@@ -136,6 +137,8 @@ export class BoardView extends FileView {
       },
       onDrop: (ids, columnIndex, beforeKey) => this.dropCards(ids, columnIndex, beforeKey),
     });
+
+    this.installColumnDrag();
 
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
@@ -313,7 +316,10 @@ export class BoardView extends FileView {
       applyPatch: (id, patch) => this.applyPatch(id, patch),
       remove: (id) => this.deleteCard(id),
       close: () => this.closeDetail(),
+      render: (source, el) => this.renderMarkdown(source, el),
     });
+    this.installPeekResize();
+    this.applyPeekWidth();
 
     this.registerDomEvent(document, "keydown", (event) => {
       if (event.key !== "Escape" || !this.peekEl.hasClass("is-open")) return;
@@ -345,6 +351,110 @@ export class BoardView extends FileView {
       event.preventDefault();
       this.showCardMenu(cardEl.dataset.id, event);
     });
+  }
+
+  // ================ 侧栏宽度 ================
+
+  private applyPeekWidth(): void {
+    this.rootEl?.style.setProperty("--sb-peek-width", `${this.plugin.settings.peekWidth}px`);
+  }
+
+  private installPeekResize(): void {
+    const grip = this.peekEl.createDiv({ cls: "sb-peek-grip", attr: { title: "拖动调整宽度" } });
+    this.registerDomEvent(grip, "pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = this.peekEl.getBoundingClientRect().width;
+      const max = Math.max(360, window.innerWidth * 0.9);
+
+      const onMove = (move: PointerEvent): void => {
+        const next = Math.min(max, Math.max(320, startWidth + (startX - move.clientX)));
+        this.peekEl.style.width = `${next}px`;
+      };
+      const finish = (): void => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        const width = Math.round(this.peekEl.getBoundingClientRect().width);
+        this.peekEl.style.width = "";
+        this.plugin.settings.peekWidth = width;
+        this.applyPeekWidth();
+        void this.plugin.saveSettings();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    });
+  }
+
+  // ================ 列拖拽换序 ================
+
+  private installColumnDrag(): void {
+    this.registerDomEvent(this.columnsEl, "pointerdown", (event) => {
+      if (event.button !== 0 || event.pointerType === "touch") return;
+      const target = event.target as HTMLElement | null;
+      if (!target || target.closest("button, input, .sb-col-title-edit")) return;
+      const head = target.closest<HTMLElement>(".sb-col-head");
+      const columnEl = head?.closest<HTMLElement>(".sb-column");
+      if (!head || !columnEl) return;
+
+      const from = Number(columnEl.dataset.columnIndex);
+      const rect = this.columnsEl.getBoundingClientRect();
+      const bar = document.createElement("div");
+      bar.className = "sb-col-drop";
+      let to: number | null = null;
+      let moved = false;
+      const startX = event.clientX;
+
+      const onMove = (move: PointerEvent): void => {
+        if (!moved && Math.abs(move.clientX - startX) < 6) return;
+        if (!moved) {
+          moved = true;
+          columnEl.addClass("sb-column--dragging");
+          this.columnsEl.appendChild(bar);
+        }
+        const columns = [...this.columnsEl.querySelectorAll<HTMLElement>(".sb-column")];
+        let index = columns.length;
+        for (const [i, el] of columns.entries()) {
+          const box = el.getBoundingClientRect();
+          if (move.clientX < box.left + box.width / 2) {
+            index = i;
+            break;
+          }
+        }
+        if (index === to) return;
+        to = index;
+        const edge = columns[Math.min(index, columns.length - 1)];
+        const box = edge.getBoundingClientRect();
+        const x = index >= columns.length ? box.right : box.left;
+        bar.style.left = `${x - rect.left + this.columnsEl.scrollLeft + (index >= columns.length ? -1 : -2)}px`;
+      };
+
+      const finish = (): void => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        columnEl.removeClass("sb-column--dragging");
+        bar.remove();
+        if (!moved || to === null) return;
+        const index = to > from ? to - 1 : to;
+        if (index === from) return;
+        this.mutate(() => {
+          const doc = this.doc;
+          return doc ? moveColumn(doc, from, index) : false;
+        });
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    });
+  }
+
+  private renderMarkdown(source: string, el: HTMLElement): void {
+    el.empty();
+    void MarkdownRenderer.render(this.app, source, el, this.boardFile?.path ?? "", this);
   }
 
   applyDensity(): void {

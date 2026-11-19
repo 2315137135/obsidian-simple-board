@@ -6,6 +6,8 @@ export interface CardEditorHost {
   applyPatch(id: string, patch: CardPatch): void;
   remove(id: string): void;
   close(): void;
+  /** 把 Markdown 渲染进给定容器（正文预览用）。 */
+  render(source: string, el: HTMLElement): void;
 }
 
 /**
@@ -23,6 +25,9 @@ export class CardEditor {
   private tagsEl!: HTMLElement;
   private tagInputEl!: HTMLInputElement;
   private bodyEl!: HTMLTextAreaElement;
+  private previewEl!: HTMLElement;
+  private bodyTabs: Record<"edit" | "preview", HTMLElement> | null = null;
+  private bodyMode: "edit" | "preview" = "edit";
 
   constructor(
     private readonly container: HTMLElement,
@@ -100,10 +105,22 @@ export class CardEditor {
       this.addTag(this.tagInputEl.value);
     });
 
-    this.bodyEl = this.container.createEl("textarea", {
+    const bodyWrap = this.container.createDiv({ cls: "sb-body" });
+    const bodyHead = bodyWrap.createDiv({ cls: "sb-body-head" });
+    const editTab = bodyHead.createEl("button", { cls: "sb-tab is-active", text: "编辑" });
+    const previewTab = bodyHead.createEl("button", { cls: "sb-tab", text: "预览" });
+    this.bodyTabs = { edit: editTab, preview: previewTab };
+    editTab.addEventListener("click", () => this.setBodyMode("edit"));
+    previewTab.addEventListener("click", () => this.setBodyMode("preview"));
+
+    this.bodyEl = bodyWrap.createEl("textarea", {
       cls: "sb-peek-body",
       attr: { rows: "6", placeholder: "正文（Markdown，可多行）", spellcheck: "false" },
     });
+    this.previewEl = bodyWrap.createDiv({
+      cls: "sb-body-preview markdown-rendered is-hidden",
+    });
+
     this.bodyEl.addEventListener("input", () => {
       this.autoGrow(this.bodyEl);
       this.schedule({ body: this.bodyEl.value });
@@ -148,11 +165,38 @@ export class CardEditor {
     if (force || document.activeElement !== this.bodyEl) this.bodyEl.value = card.body;
     this.renderProps(card);
     this.renderTags();
+    if (this.bodyMode === "preview") this.renderPreview();
 
     window.requestAnimationFrame(() => {
       this.autoGrow(this.titleEl);
       this.autoGrow(this.bodyEl);
     });
+  }
+
+  /** 正文两种看法：编辑原文，或渲染成 Markdown。 */
+  private setBodyMode(mode: "edit" | "preview"): void {
+    this.bodyMode = mode;
+    this.bodyTabs?.edit.toggleClass("is-active", mode === "edit");
+    this.bodyTabs?.preview.toggleClass("is-active", mode === "preview");
+    this.bodyEl.toggleClass("is-hidden", mode === "preview");
+    this.previewEl.toggleClass("is-hidden", mode === "edit");
+    if (mode === "edit") {
+      this.bodyEl.focus({ preventScroll: true });
+      this.autoGrow(this.bodyEl);
+      return;
+    }
+    this.flush();
+    this.renderPreview();
+  }
+
+  private renderPreview(): void {
+    const text = this.bodyEl.value.trim();
+    if (!text) {
+      this.previewEl.empty();
+      this.previewEl.createSpan({ cls: "sb-card-empty", text: "还没有正文" });
+      return;
+    }
+    this.host.render(this.bodyEl.value, this.previewEl);
   }
 
   private renderProps(card: CardSnapshot): void {

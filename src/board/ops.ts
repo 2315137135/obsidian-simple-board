@@ -134,6 +134,15 @@ export function renameColumn(doc: BoardDoc, from: string, to: string): boolean {
   return true;
 }
 
+/** 换列次序：只动 columns 数组，卡片靠列名引用，不受影响。 */
+export function moveColumn(doc: BoardDoc, from: number, to: number): boolean {
+  const size = doc.columns.length;
+  if (from < 0 || from >= size || to < 0 || to >= size || from === to) return false;
+  const [moved] = doc.columns.splice(from, 1);
+  doc.columns.splice(to, 0, moved);
+  return true;
+}
+
 /** 删列连带删掉列里的卡片：没有列可以容纳它们。 */
 export function removeColumn(doc: BoardDoc, column: string): boolean {
   const index = doc.columns.indexOf(column);

@@ -118,6 +118,7 @@ input.sb-title-edit {
 /* ================ 列 ================ */
 
 .sb-columns {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -136,6 +137,20 @@ input.sb-title-edit {
   padding: 6px;
   background: var(--background-secondary);
   border-radius: var(--radius-l);
+}
+
+.sb-column--dragging {
+  opacity: 0.45;
+}
+
+.sb-col-drop {
+  position: absolute;
+  top: 14px;
+  bottom: 24px;
+  width: 2px;
+  background: var(--interactive-accent);
+  border-radius: 1px;
+  pointer-events: none;
 }
 
 .sb-col-head {
@@ -516,7 +531,7 @@ input.sb-title-edit {
   z-index: 6;
   display: flex;
   flex-direction: column;
-  width: min(440px, 92%);
+  width: min(var(--sb-peek-width, 520px), 92%);
   padding: 16px 20px 28px;
   overflow-y: auto;
   background: var(--background-primary);
@@ -534,6 +549,20 @@ input.sb-title-edit {
   transform: translateX(0);
   transition: transform 160ms ease-out, visibility 0s;
   pointer-events: auto;
+}
+
+/* 左边缘拖拽改宽 */
+.sb-peek-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 7px;
+  cursor: col-resize;
+}
+
+.sb-peek-grip:hover {
+  background: var(--background-modifier-hover);
 }
 
 .sb-peek-head {
@@ -705,10 +734,50 @@ input.sb-tag-input:focus {
   box-shadow: none;
 }
 
+.sb-body {
+  margin-top: 14px;
+}
+
+.sb-body-head {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.sb-tab {
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-s);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.sb-tab:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.sb-tab.is-active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.sb-body-preview {
+  min-height: 140px;
+  font-size: var(--font-text-size);
+  line-height: 1.6;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
 .sb-peek-body {
   width: 100%;
   min-height: 140px;
-  margin-top: 14px;
   padding: 0;
   overflow: hidden;
   font-size: var(--font-text-size);

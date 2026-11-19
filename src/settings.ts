@@ -9,6 +9,8 @@ export interface BoardSettings {
   hideDoneDefault: boolean;
   autoOpen: boolean;
   newBoardFolder: string;
+  /** 卡片侧栏宽度（px），拖动左边缘改，记在设置里。 */
+  peekWidth: number;
 }
 
 export const DEFAULT_SETTINGS: BoardSettings = {
@@ -16,6 +18,7 @@ export const DEFAULT_SETTINGS: BoardSettings = {
   hideDoneDefault: false,
   autoOpen: true,
   newBoardFolder: "",
+  peekWidth: 520,
 };
 
 export class BoardSettingTab extends PluginSettingTab {
