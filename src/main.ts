@@ -1,8 +1,9 @@
-import { MarkdownView, Plugin, TFile, normalizePath } from "obsidian";
+import { MarkdownView, Plugin, TFolder, TFile, normalizePath } from "obsidian";
 import { FORMAT_VERSION, isBoardPath, type BoardDoc } from "./board/model";
 import { newCard } from "./board/parse";
 import { serializeDoc } from "./board/serialize";
 import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
+import { NewBoardModal } from "./ui/new-board-modal";
 import { BoardView, VIEW_TYPE_BOARD } from "./view";
 
 export default class SimpleBoardPlugin extends Plugin {
@@ -16,11 +17,11 @@ export default class SimpleBoardPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE_BOARD, (leaf) => new BoardView(leaf, this));
 
-    this.addRibbonIcon("layout-dashboard", "新建看板", () => void this.createBoard());
+    this.addRibbonIcon("layout-dashboard", "新建看板", () => this.askNewBoard());
     this.addCommand({
       id: "create-board",
       name: "新建看板",
-      callback: () => void this.createBoard(),
+      callback: () => this.askNewBoard(),
     });
     this.addCommand({
       id: "open-as-board",
@@ -45,6 +46,15 @@ export default class SimpleBoardPlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
+        if (file instanceof TFolder) {
+          menu.addItem((item) =>
+            item
+              .setTitle("新建看板")
+              .setIcon("layout-dashboard")
+              .onClick(() => this.askNewBoard(file.path)),
+          );
+          return;
+        }
         if (!(file instanceof TFile) || !isBoardPath(file.path)) return;
         menu.addItem((item) =>
           item
@@ -93,9 +103,14 @@ export default class SimpleBoardPlugin extends Plugin {
     }
   }
 
-  private async createBoard(): Promise<void> {
-    const folder = this.settings.newBoardFolder.trim() || this.activeFolder();
-    const path = this.uniquePath(folder, "未命名看板");
+  /** 问名字，再在指定文件夹（缺省用设置或当前文件所在目录）里落一个空看板。 */
+  private askNewBoard(folder?: string): void {
+    const target = folder ?? (this.settings.newBoardFolder.trim() || this.activeFolder());
+    new NewBoardModal(this.app, target, (name) => void this.createBoard(target, name)).open();
+  }
+
+  private async createBoard(folder: string, name: string): Promise<void> {
+    const path = this.uniquePath(folder, name.trim() || "未命名看板");
     const doc: BoardDoc = {
       version: FORMAT_VERSION,
       columns: ["待办", "进行中", "已完成"],
