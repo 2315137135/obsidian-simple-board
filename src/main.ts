@@ -1,4 +1,4 @@
-import { MarkdownView, Plugin, TFile, normalizePath } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, normalizePath } from "obsidian";
 import { BOARD_MARKER_KEY, BOARD_MARKER_VALUE, isBoardFrontmatter } from "./board/model";
 import { genId } from "./board/parse";
 import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
@@ -9,8 +9,6 @@ export default class SimpleBoardPlugin extends Plugin {
   private switching = false;
   /** 用户明确要求用 Markdown 打开的文件，别再自动切回看板。 */
   private markdownPref = new Set<string>();
-  /** 用户明确要求用看板打开、但文件里没有标记的文档，别把它顶回 Markdown。 */
-  private boardPref = new Set<string>();
 
   override async onload(): Promise<void> {
     await this.loadSettings();
@@ -117,7 +115,7 @@ export default class SimpleBoardPlugin extends Plugin {
 
   async openAsBoard(file: TFile): Promise<void> {
     this.markdownPref.delete(file.path);
-    this.boardPref.add(file.path);
+    await this.ensureBoardMarker(file);
     this.switching = true;
     try {
       const leaf = this.app.workspace.getLeaf(false);
@@ -129,7 +127,6 @@ export default class SimpleBoardPlugin extends Plugin {
 
   async openAsMarkdown(file: TFile): Promise<void> {
     this.markdownPref.add(file.path);
-    this.boardPref.delete(file.path);
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.setViewState({
       type: "markdown",
@@ -148,7 +145,7 @@ export default class SimpleBoardPlugin extends Plugin {
 
     if (type === VIEW_TYPE_BOARD) {
       // 看板叶子被拿去开别的文档：不是看板文件就退回 Markdown
-      if (isBoard || this.boardPref.has(file.path)) return;
+      if (isBoard) return;
       this.switching = true;
       try {
         await leaf.setViewState({
@@ -166,6 +163,35 @@ export default class SimpleBoardPlugin extends Plugin {
     if (this.markdownPref.has(file.path) || !isBoard) return;
     if ((leaf.view as MarkdownView).file?.path !== file.path) return;
     await this.openAsBoard(file);
+  }
+
+  /**
+   * 看板身份写在文件里（frontmatter 标记），不靠会话内存。
+   * 写完等 metadataCache 认到标记再返回，否则随后的导航检查会把它顶回 Markdown。
+   */
+  private async ensureBoardMarker(file: TFile): Promise<void> {
+    if (isBoardFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter)) return;
+    const seen = new Promise<void>((resolve) => {
+      const ref = this.app.metadataCache.on("changed", (changed) => {
+        if (changed.path !== file.path) return;
+        this.app.metadataCache.offref(ref);
+        window.clearTimeout(timer);
+        resolve();
+      });
+      const timer = window.setTimeout(() => {
+        this.app.metadataCache.offref(ref);
+        resolve();
+      }, 1500);
+    });
+    try {
+      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        frontmatter[BOARD_MARKER_KEY] = BOARD_MARKER_VALUE;
+      });
+      await seen;
+    } catch (error) {
+      console.error("写入看板标记失败", error);
+      new Notice("无法写入看板标记，本次仍以看板显示");
+    }
   }
 
   private activeFolder(): string {
