@@ -3,7 +3,6 @@ import { FORMAT_VERSION, isBoardPath, type BoardDoc } from "./board/model";
 import { newCard } from "./board/parse";
 import { serializeDoc } from "./board/serialize";
 import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
-import { NewBoardModal } from "./ui/new-board-modal";
 import { BoardView, VIEW_TYPE_BOARD } from "./view";
 
 export default class SimpleBoardPlugin extends Plugin {
@@ -17,11 +16,11 @@ export default class SimpleBoardPlugin extends Plugin {
 
     this.registerView(VIEW_TYPE_BOARD, (leaf) => new BoardView(leaf, this));
 
-    this.addRibbonIcon("layout-dashboard", "新建看板", () => this.askNewBoard());
+    this.addRibbonIcon("layout-dashboard", "新建看板", () => void this.createBoard());
     this.addCommand({
       id: "create-board",
       name: "新建看板",
-      callback: () => this.askNewBoard(),
+      callback: () => void this.createBoard(),
     });
     this.addCommand({
       id: "open-as-board",
@@ -51,7 +50,7 @@ export default class SimpleBoardPlugin extends Plugin {
             item
               .setTitle("新建看板")
               .setIcon("layout-dashboard")
-              .onClick(() => this.askNewBoard(file.path)),
+              .onClick(() => void this.createBoard(file.path)),
           );
           return;
         }
@@ -103,14 +102,10 @@ export default class SimpleBoardPlugin extends Plugin {
     }
   }
 
-  /** 问名字，再在指定文件夹（缺省用设置或当前文件所在目录）里落一个空看板。 */
-  private askNewBoard(folder?: string): void {
+  /** 立刻落一个 `未命名看板.board.md` 并打开，名字在看板顶部点着改。 */
+  private async createBoard(folder?: string): Promise<void> {
     const target = folder ?? (this.settings.newBoardFolder.trim() || this.activeFolder());
-    new NewBoardModal(this.app, target, (name) => void this.createBoard(target, name)).open();
-  }
-
-  private async createBoard(folder: string, name: string): Promise<void> {
-    const path = this.uniquePath(folder, name.trim() || "未命名看板");
+    const path = this.uniquePath(target, "未命名看板");
     const doc: BoardDoc = {
       version: FORMAT_VERSION,
       columns: ["待办", "进行中", "已完成"],

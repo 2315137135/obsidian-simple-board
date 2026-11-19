@@ -1,4 +1,13 @@
-import { FileView, MarkdownRenderer, Menu, Notice, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import {
+  FileView,
+  MarkdownRenderer,
+  Menu,
+  Notice,
+  TFile,
+  WorkspaceLeaf,
+  normalizePath,
+  setIcon,
+} from "obsidian";
 import type SimpleBoardPlugin from "./main";
 import { EMPTY_FILTER, cardMatches, type FilterState } from "./board/filter";
 import type { BoardDoc, Card } from "./board/model";
@@ -46,6 +55,11 @@ export interface CardPatch {
   column?: string;
 }
 
+/** 文件名去掉 `.board.md`，剩下的就是看板名。 */
+function boardName(basename: string): string {
+  return basename.replace(/\.board$/i, "");
+}
+
 const DENSITY_CLASS: Record<BoardDensity, string> = {
   comfortable: "sb-density-comfortable",
   compact: "sb-density-compact",
@@ -63,6 +77,7 @@ export class BoardView extends FileView {
   private editingId: string | null = null;
   private gesturesOff: (() => void) | null = null;
   private rootEl!: HTMLElement;
+  private titleEl!: HTMLElement;
   private columnsEl!: HTMLElement;
   private searchEl!: HTMLInputElement;
   private doneEl!: HTMLButtonElement;
@@ -84,7 +99,7 @@ export class BoardView extends FileView {
   }
 
   override getDisplayText(): string {
-    return this.file?.basename ?? "看板";
+    return this.file ? boardName(this.file.basename) : "看板";
   }
 
   override getIcon(): string {
@@ -128,6 +143,13 @@ export class BoardView extends FileView {
         void this.handleExternalChange();
       }),
     );
+
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (file.path !== this.file?.path && oldPath !== this.file?.path) return;
+        this.renderTitle();
+      }),
+    );
   }
 
   override async onClose(): Promise<void> {
@@ -141,6 +163,7 @@ export class BoardView extends FileView {
   override async onLoadFile(file: TFile): Promise<void> {
     await super.onLoadFile(file);
     await this.loadBoard();
+    this.syncHeaderTitle();
   }
 
   override async onUnloadFile(file: TFile): Promise<void> {
@@ -252,6 +275,9 @@ export class BoardView extends FileView {
     this.rootEl = this.contentEl;
     this.applyDensity();
 
+    this.titleEl = this.contentEl.createDiv({ cls: "sb-title", attr: { title: "点击改名" } });
+    this.titleEl.addEventListener("click", () => this.startRenameBoard());
+
     const toolbar = this.contentEl.createDiv({ cls: "sb-toolbar" });
     this.searchEl = toolbar.createEl("input", {
       cls: "sb-search",
@@ -331,6 +357,7 @@ export class BoardView extends FileView {
 
   private render(): void {
     if (!this.rootEl || !this.columnsEl) return;
+    this.renderTitle();
     this.rememberScroll();
     this.doneEl?.toggleClass("is-active", this.filter.hideDone);
 
@@ -356,6 +383,75 @@ export class BoardView extends FileView {
     this.renderBatch();
     this.restoreScroll();
     if (this.detailOpen) this.cardEditor?.sync();
+  }
+
+  /** 视图头与标签页的标题在拿到 file 之前就渲染过一次，这里补一次真实名字。 */
+  private syncHeaderTitle(): void {
+    const name = this.file ? boardName(this.file.basename) : "看板";
+    this.containerEl.querySelector<HTMLElement>(".view-header-title")?.setText(name);
+    (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+  }
+
+  private renderTitle(): void {
+    if (!this.titleEl) return;
+    this.titleEl.setText(this.file ? boardName(this.file.basename) : "看板");
+  }
+
+  // ================ 改名 ================
+
+  /** 看板名就是文件名：点标题改名，改完同步到文件。 */
+  private startRenameBoard(): void {
+    const file = this.boardFile;
+    if (!file || this.titleEl.querySelector("input")) return;
+    const current = boardName(file.basename);
+
+    const input = document.createElement("input");
+    input.className = "sb-title-edit";
+    input.value = current;
+    this.titleEl.replaceChildren(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const finish = (apply: boolean): void => {
+      if (done) return;
+      done = true;
+      const value = input.value.trim();
+      this.renderTitle();
+      if (apply && value && value !== current) void this.renameBoard(file, value);
+    };
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+  }
+
+  private async renameBoard(file: TFile, value: string): Promise<void> {
+    const base = value.replace(/\.board(\.md)?$/i, "").trim();
+    if (!base) return;
+    const parent = file.parent?.path ?? "";
+    const path = normalizePath(`${parent ? `${parent}/` : ""}${base}.board.md`);
+    if (path === file.path) return;
+    if (this.app.vault.getAbstractFileByPath(path)) {
+      new Notice("同名文件已存在");
+      return;
+    }
+    try {
+      await this.app.fileManager.renameFile(file, path);
+    } catch (error) {
+      console.error("重命名看板失败", error);
+      new Notice("重命名失败");
+      return;
+    }
+    this.renderTitle();
+    this.syncHeaderTitle();
   }
 
   private renderColumn(column: string, index: number): void {
