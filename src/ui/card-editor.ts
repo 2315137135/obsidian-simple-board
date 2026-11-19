@@ -1,7 +1,6 @@
 import { DropdownComponent, Notice, ToggleComponent, setIcon } from "obsidian";
+import type { BodyMode } from "../settings";
 import type { CardPatch, CardSnapshot } from "../view";
-
-type BodyMode = "edit" | "preview" | "compare";
 
 const BODY_MODES: BodyMode[] = ["edit", "preview", "compare"];
 const BODY_LABEL: Record<BodyMode, string> = { edit: "编辑", preview: "预览", compare: "对比" };
@@ -13,6 +12,9 @@ export interface CardEditorHost {
   close(): void;
   /** 把 Markdown 渲染进给定容器（正文预览用）。 */
   render(source: string, el: HTMLElement): void;
+  /** 正文看法是全局的：看看还是编排，不随卡片变。 */
+  bodyMode(): BodyMode;
+  saveBodyMode(mode: BodyMode): void;
 }
 
 /**
@@ -118,10 +120,12 @@ export class CardEditor {
     const seg = this.bodyWrapEl.createDiv({ cls: "sb-seg" });
     for (const mode of BODY_MODES) {
       const button = seg.createEl("button", { cls: "sb-seg-btn", text: BODY_LABEL[mode] });
-      if (mode === "edit") button.addClass("is-active");
       button.addEventListener("click", () => this.setBodyMode(mode));
       this.segButtons.set(mode, button);
     }
+    this.bodyMode = this.host.bodyMode();
+    this.bodyWrapEl.dataset.mode = this.bodyMode;
+    for (const [key, button] of this.segButtons) button.toggleClass("is-active", key === this.bodyMode);
 
     const panes = this.bodyWrapEl.createDiv({ cls: "sb-panes" });
     this.bodyEl = panes.createEl("textarea", {
@@ -188,9 +192,10 @@ export class CardEditor {
     });
   }
 
-  /** 正文三种看法：原文、渲染结果，或左右分屏同时看。 */
+  /** 正文三种看法：原文、渲染结果，或左右分屏同时看。选择记在设置里。 */
   private setBodyMode(mode: BodyMode): void {
     this.bodyMode = mode;
+    this.host.saveBodyMode(mode);
     this.bodyWrapEl.dataset.mode = mode;
     for (const [key, button] of this.segButtons) button.toggleClass("is-active", key === mode);
     if (mode === "edit") {

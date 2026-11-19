@@ -2,7 +2,12 @@ import { MarkdownView, Plugin, TFolder, TFile, normalizePath } from "obsidian";
 import { FORMAT_VERSION, isBoardPath, type BoardDoc } from "./board/model";
 import { newCard } from "./board/parse";
 import { serializeDoc } from "./board/serialize";
-import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
+import {
+  BoardSettingTab,
+  DEFAULT_SETTINGS,
+  isBodyMode,
+  type BoardSettings,
+} from "./settings";
 import { BoardView, VIEW_TYPE_BOARD } from "./view";
 
 export default class SimpleBoardPlugin extends Plugin {
@@ -90,7 +95,9 @@ export default class SimpleBoardPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) as Partial<BoardSettings>) };
+    const stored = (await this.loadData()) as Partial<BoardSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...stored };
+    if (!isBodyMode(this.settings.bodyMode)) this.settings.bodyMode = DEFAULT_SETTINGS.bodyMode;
   }
 
   async saveSettings(): Promise<void> {

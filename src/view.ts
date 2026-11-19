@@ -318,6 +318,11 @@ export class BoardView extends FileView {
       remove: (id) => this.deleteCard(id),
       close: () => this.closeDetail(),
       render: (source, el) => this.renderMarkdown(source, el),
+      bodyMode: () => this.plugin.settings.bodyMode,
+      saveBodyMode: (mode) => {
+        this.plugin.settings.bodyMode = mode;
+        void this.plugin.saveSettings();
+      },
     });
     this.installPeekResize();
     this.applyPeekWidth();

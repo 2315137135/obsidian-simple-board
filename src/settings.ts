@@ -4,6 +4,15 @@ import type SimpleBoardPlugin from "./main";
 
 export type BoardDensity = "comfortable" | "compact" | "single";
 
+/** 正文的三种看法。这是全局状态：你是「看看」还是「在编排任务」，不随卡片变。 */
+export type BodyMode = "edit" | "preview" | "compare";
+
+const BODY_MODES: BodyMode[] = ["edit", "preview", "compare"];
+
+export function isBodyMode(value: unknown): value is BodyMode {
+  return BODY_MODES.includes(value as BodyMode);
+}
+
 export interface BoardSettings {
   density: BoardDensity;
   hideDoneDefault: boolean;
@@ -11,6 +20,7 @@ export interface BoardSettings {
   newBoardFolder: string;
   /** 卡片侧栏宽度（px），拖动左边缘改，记在设置里。 */
   peekWidth: number;
+  bodyMode: BodyMode;
 }
 
 export const DEFAULT_SETTINGS: BoardSettings = {
@@ -19,6 +29,7 @@ export const DEFAULT_SETTINGS: BoardSettings = {
   autoOpen: true,
   newBoardFolder: "",
   peekWidth: 520,
+  bodyMode: "edit",
 };
 
 export class BoardSettingTab extends PluginSettingTab {
