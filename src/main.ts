@@ -1,6 +1,7 @@
-import { MarkdownView, Notice, Plugin, TFile, normalizePath } from "obsidian";
-import { BOARD_MARKER_KEY, BOARD_MARKER_VALUE, isBoardFrontmatter } from "./board/model";
-import { genId } from "./board/parse";
+import { MarkdownView, Plugin, TFile, normalizePath } from "obsidian";
+import { FORMAT_VERSION, isBoardPath, type BoardDoc } from "./board/model";
+import { newCard } from "./board/parse";
+import { serializeDoc } from "./board/serialize";
 import { BoardSettingTab, DEFAULT_SETTINGS, type BoardSettings } from "./settings";
 import { BoardView, VIEW_TYPE_BOARD } from "./view";
 
@@ -26,7 +27,7 @@ export default class SimpleBoardPlugin extends Plugin {
       name: "打开为看板",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension !== "md") return false;
+        if (!file || !isBoardPath(file.path)) return false;
         if (!checking) void this.openAsBoard(file);
         return true;
       },
@@ -36,7 +37,7 @@ export default class SimpleBoardPlugin extends Plugin {
       name: "打开为 Markdown",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension !== "md") return false;
+        if (!file || !isBoardPath(file.path)) return false;
         if (!checking) void this.openAsMarkdown(file);
         return true;
       },
@@ -44,7 +45,7 @@ export default class SimpleBoardPlugin extends Plugin {
 
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
-        if (!(file instanceof TFile) || file.extension !== "md") return;
+        if (!(file instanceof TFile) || !isBoardPath(file.path)) return;
         menu.addItem((item) =>
           item
             .setTitle("打开为看板")
@@ -63,14 +64,14 @@ export default class SimpleBoardPlugin extends Plugin {
     this.addSettingTab(new BoardSettingTab(this.app, this));
 
     this.app.workspace.onLayoutReady(() => {
-      this.registerEvent(this.app.workspace.on("file-open", (file) => void this.maybeOpenBoard(file)));
-      // 启动时 file-open 可能早于 frontmatter 解析完成，换叶子时再补一次
+      this.registerEvent(this.app.workspace.on("file-open", (file) => void this.syncView(file)));
+      // 启动时 file-open 可能早于视图就位，换叶子时再补一次
       this.registerEvent(
         this.app.workspace.on("active-leaf-change", () =>
-          void this.maybeOpenBoard(this.app.workspace.getActiveFile()),
+          void this.syncView(this.app.workspace.getActiveFile()),
         ),
       );
-      void this.maybeOpenBoard(this.app.workspace.getActiveFile());
+      void this.syncView(this.app.workspace.getActiveFile());
     });
   }
 
@@ -95,27 +96,18 @@ export default class SimpleBoardPlugin extends Plugin {
   private async createBoard(): Promise<void> {
     const folder = this.settings.newBoardFolder.trim() || this.activeFolder();
     const path = this.uniquePath(folder, "未命名看板");
-    const content = [
-      "---",
-      `${BOARD_MARKER_KEY}: ${BOARD_MARKER_VALUE}`,
-      "---",
-      "",
-      "## 待办",
-      `- [ ] 第一张卡片 ^${genId()}`,
-      "",
-      "## 进行中",
-      "",
-      "## 已完成",
-      "",
-    ].join("\n");
-
-    const file = await this.app.vault.create(path, content);
+    const doc: BoardDoc = {
+      version: FORMAT_VERSION,
+      columns: ["待办", "进行中", "已完成"],
+      cards: [newCard("待办", "第一张卡片")],
+      orphans: [],
+    };
+    const file = await this.app.vault.create(path, serializeDoc(doc));
     await this.openAsBoard(file);
   }
 
   async openAsBoard(file: TFile): Promise<void> {
     this.markdownPref.delete(file.path);
-    await this.ensureBoardMarker(file);
     this.switching = true;
     try {
       const leaf = this.app.workspace.getLeaf(false);
@@ -136,62 +128,28 @@ export default class SimpleBoardPlugin extends Plugin {
   }
 
   /** 看板与 Markdown 双向跟随：同一叶子里换文档时，视图类型要对得上。 */
-  private async maybeOpenBoard(file: TFile | null): Promise<void> {
-    if (!file || file.extension !== "md" || this.switching) return;
+  private async syncView(file: TFile | null): Promise<void> {
+    if (!file || this.switching) return;
     const leaf = this.app.workspace.getLeaf(false);
     if (!leaf) return;
     const type = leaf.view.getViewType();
-    const isBoard = isBoardFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter);
+    const board = isBoardPath(file.path);
 
     if (type === VIEW_TYPE_BOARD) {
-      // 看板叶子被拿去开别的文档：不是看板文件就退回 Markdown
-      if (isBoard) return;
+      if (board) return;
       this.switching = true;
       try {
-        await leaf.setViewState({
-          type: "markdown",
-          state: { file: file.path },
-          active: true,
-        });
+        await leaf.setViewState({ type: "markdown", state: { file: file.path }, active: true });
       } finally {
         this.switching = false;
       }
       return;
     }
 
-    if (!this.settings.autoOpen || type !== "markdown") return;
-    if (this.markdownPref.has(file.path) || !isBoard) return;
+    if (!this.settings.autoOpen || type !== "markdown" || !board) return;
+    if (this.markdownPref.has(file.path)) return;
     if ((leaf.view as MarkdownView).file?.path !== file.path) return;
     await this.openAsBoard(file);
-  }
-
-  /**
-   * 看板身份写在文件里（frontmatter 标记），不靠会话内存。
-   * 写完等 metadataCache 认到标记再返回，否则随后的导航检查会把它顶回 Markdown。
-   */
-  private async ensureBoardMarker(file: TFile): Promise<void> {
-    if (isBoardFrontmatter(this.app.metadataCache.getFileCache(file)?.frontmatter)) return;
-    const seen = new Promise<void>((resolve) => {
-      const ref = this.app.metadataCache.on("changed", (changed) => {
-        if (changed.path !== file.path) return;
-        this.app.metadataCache.offref(ref);
-        window.clearTimeout(timer);
-        resolve();
-      });
-      const timer = window.setTimeout(() => {
-        this.app.metadataCache.offref(ref);
-        resolve();
-      }, 1500);
-    });
-    try {
-      await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-        frontmatter[BOARD_MARKER_KEY] = BOARD_MARKER_VALUE;
-      });
-      await seen;
-    } catch (error) {
-      console.error("写入看板标记失败", error);
-      new Notice("无法写入看板标记，本次仍以看板显示");
-    }
   }
 
   private activeFolder(): string {
@@ -200,10 +158,10 @@ export default class SimpleBoardPlugin extends Plugin {
 
   private uniquePath(folder: string, base: string): string {
     const prefix = folder ? `${folder}/` : "";
-    let path = normalizePath(`${prefix}${base}.md`);
+    let path = normalizePath(`${prefix}${base}.board.md`);
     let index = 2;
     while (this.app.vault.getAbstractFileByPath(path)) {
-      path = normalizePath(`${prefix}${base} ${index}.md`);
+      path = normalizePath(`${prefix}${base} ${index}.board.md`);
       index += 1;
     }
     return path;

@@ -1,11 +1,11 @@
 import { FileView, MarkdownRenderer, Menu, Notice, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type SimpleBoardPlugin from "./main";
-import { EMPTY_FILTER, cardMatches, cardTags, stripTags, type FilterState } from "./board/filter";
-import type { BoardDoc, Card, Column } from "./board/model";
-import { allCards, findCard, findColumnOf, isCard } from "./board/model";
+import { EMPTY_FILTER, cardMatches, type FilterState } from "./board/filter";
+import type { BoardDoc, Card } from "./board/model";
+import { cardsOf, findCard } from "./board/model";
+import { parseBoardFile } from "./board/io";
 import {
   addColumn,
-  bodyForEditing,
   clearDone,
   deleteCards,
   insertCard,
@@ -15,9 +15,10 @@ import {
   renameColumn,
   setCardBody,
   setCardTitle,
+  setCardTags,
   toggleDone,
 } from "./board/ops";
-import { newCard, parseDoc } from "./board/parse";
+import { newCard } from "./board/parse";
 import { serializeDoc } from "./board/serialize";
 import { CardEditor } from "./ui/card-editor";
 import { installGestures } from "./ui/drag";
@@ -32,8 +33,7 @@ export interface CardSnapshot {
   body: string;
   tags: string[];
   done: boolean;
-  columnIndex: number;
-  columnTitle: string;
+  column: string;
   columns: string[];
   boardName: string;
 }
@@ -41,8 +41,9 @@ export interface CardSnapshot {
 export interface CardPatch {
   title?: string;
   body?: string;
+  tags?: string[];
   done?: boolean;
-  columnIndex?: number;
+  column?: string;
 }
 
 const DENSITY_CLASS: Record<BoardDensity, string> = {
@@ -160,7 +161,7 @@ export class BoardView extends FileView {
     if (!file) return;
     const text = await this.app.vault.cachedRead(file);
     this.lastSaved = text;
-    this.doc = parseDoc(text);
+    this.doc = parseBoardFile(text);
     this.selection.clear();
     this.history = [];
     this.render();
@@ -200,7 +201,7 @@ export class BoardView extends FileView {
       new Notice("看板文件已被外部修改，已重新载入");
       const text = await this.app.vault.read(file);
       this.lastSaved = text;
-      this.doc = parseDoc(text);
+      this.doc = parseBoardFile(text);
       this.render();
       return;
     }
@@ -214,7 +215,7 @@ export class BoardView extends FileView {
     const text = await this.app.vault.cachedRead(file);
     if (text === this.lastSaved) return;
     this.lastSaved = text;
-    this.doc = parseDoc(text);
+    this.doc = parseBoardFile(text);
     this.render();
   }
 
@@ -237,7 +238,7 @@ export class BoardView extends FileView {
       new Notice("没有可撤销的操作");
       return;
     }
-    this.doc = parseDoc(previous);
+    this.doc = parseBoardFile(previous);
     this.selection.clear();
     this.scheduleSave();
     this.render();
@@ -336,7 +337,7 @@ export class BoardView extends FileView {
     const doc = this.doc;
     this.columnsEl.empty();
     if (!doc) {
-      this.columnsEl.createDiv({ cls: "sb-empty", text: "打开一个带 board: true 的笔记" });
+      this.columnsEl.createDiv({ cls: "sb-empty", text: "打开一个 .board.md 文件" });
       return;
     }
 
@@ -357,33 +358,34 @@ export class BoardView extends FileView {
     if (this.detailOpen) this.cardEditor?.sync();
   }
 
-  private renderColumn(column: Column, index: number): void {
+  private renderColumn(column: string, index: number): void {
+    const doc = this.doc;
+    if (!doc) return;
     const columnEl = this.columnsEl.createDiv({ cls: "sb-column" });
     columnEl.dataset.columnIndex = String(index);
     if (this.plugin.settings.hideDoneDefault) columnEl.addClass("sb-hide-done");
 
     const head = columnEl.createDiv({ cls: "sb-col-head" });
-    const title = head.createDiv({ cls: "sb-col-title", text: column.title });
+    const title = head.createDiv({ cls: "sb-col-title", text: column });
     title.addEventListener("click", () => this.editColumnTitle(column, title));
 
-    const visible = column.items.filter(
-      (item) => isCard(item) && cardMatches(item, this.filter),
-    ).length;
+    const cards = cardsOf(doc, column);
+    const visible = cards.filter((card) => cardMatches(card, this.filter)).length;
     head.createSpan({ cls: "sb-col-count", text: String(visible) });
 
     const menuBtn = head.createEl("button", { cls: "sb-col-menu", attr: { "aria-label": "列操作" } });
     menuBtn.textContent = "⋯";
-    menuBtn.addEventListener("click", (event) => this.showColumnMenu(index, event));
+    menuBtn.addEventListener("click", (event) => this.showColumnMenu(column, event));
 
     const body = columnEl.createDiv({ cls: "sb-col-body" });
     body.dataset.columnIndex = String(index);
-    for (const item of column.items) {
-      if (!isCard(item) || !cardMatches(item, this.filter)) continue;
-      this.renderCard(body, item);
+    for (const card of cards) {
+      if (!cardMatches(card, this.filter)) continue;
+      this.renderCard(body, card);
     }
 
     const addCard = columnEl.createEl("button", { cls: "sb-add", text: "+ 新建卡片" });
-    addCard.addEventListener("click", () => this.createCard(index));
+    addCard.addEventListener("click", () => this.createCard(column));
   }
 
   private renderCard(parent: HTMLElement, card: Card): void {
@@ -415,30 +417,22 @@ export class BoardView extends FileView {
 
     const content = el.createDiv({ cls: "sb-card-content" });
     const text = content.createDiv({ cls: "sb-card-text" });
-    const title = stripTags(card.text);
-    if (title) {
+    if (card.title) {
       // 删除线交给 Markdown 的 <del>，比给容器加 text-decoration 更可靠
-      const source = card.done ? `~~${title}~~` : title;
+      const source = card.done ? `~~${card.title}~~` : card.title;
       void MarkdownRenderer.render(this.app, source, text, this.boardFile?.path ?? "", this);
     } else {
       text.createSpan({ cls: "sb-card-empty", text: "空卡片" });
     }
 
-    if (card.body.length > 0) {
+    if (card.body.trim() !== "") {
       const extra = content.createDiv({ cls: "sb-card-extra" });
-      void MarkdownRenderer.render(
-        this.app,
-        card.body.join("\n").trim(),
-        extra,
-        this.boardFile?.path ?? "",
-        this,
-      );
+      void MarkdownRenderer.render(this.app, card.body, extra, this.boardFile?.path ?? "", this);
     }
 
-    const tags = cardTags(card);
-    if (tags.length > 0) {
+    if (card.tags.length > 0) {
       const meta = content.createDiv({ cls: "sb-card-meta" });
-      for (const tag of tags) meta.createSpan({ cls: "sb-chip", text: tag });
+      for (const tag of card.tags) meta.createSpan({ cls: "sb-chip", text: `#${tag}` });
     }
 
     el.addEventListener("keydown", (event) => {
@@ -513,8 +507,8 @@ export class BoardView extends FileView {
 
     const area = document.createElement("textarea");
     area.className = "sb-card-edit";
-    // 输入框里只有标题，标签仍由下面的 chip 行显示，写回时再拼起来
-    area.value = stripTags(card.text);
+    // 输入框里只有标题，标签仍由下面的 chip 行显示
+    area.value = card.title;
     area.spellcheck = false;
     textEl.replaceWith(area);
 
@@ -558,8 +552,8 @@ export class BoardView extends FileView {
       return;
     }
     this.selection.delete(id);
-    const composed = [stripTags(value), ...cardTags(card)].filter(Boolean).join(" ");
-    if (!this.mutate(() => setCardTitle(card, composed))) this.render();
+    // setCardTitle 会把手打的 #标签 抽到 tags 里，标题只留正文
+    if (!this.mutate(() => setCardTitle(card, value))) this.render();
   }
 
   private cancelEdit(): void {
@@ -568,10 +562,10 @@ export class BoardView extends FileView {
     this.render();
   }
 
-  private editColumnTitle(column: Column, titleEl: HTMLElement): void {
+  private editColumnTitle(column: string, titleEl: HTMLElement): void {
     const input = document.createElement("input");
     input.className = "sb-col-title-edit";
-    input.value = column.title;
+    input.value = column;
     titleEl.replaceWith(input);
     input.focus();
     input.select();
@@ -581,14 +575,20 @@ export class BoardView extends FileView {
       if (closed) return;
       closed = true;
       const value = input.value.trim();
-      if (!apply || !value || value === column.title) {
+      if (!apply || !value || value === column) {
         this.render();
         return;
       }
+      const doc = this.doc;
       this.mutate(() => {
-        renameColumn(column, value);
+        if (!doc) return false;
+        if (!renameColumn(doc, column, value)) {
+          new Notice("列名重复或为空");
+          return false;
+        }
         return true;
       });
+      this.render();
     };
     input.addEventListener("blur", () => close(true));
     input.addEventListener("keydown", (event) => {
@@ -604,11 +604,11 @@ export class BoardView extends FileView {
 
   // ================ 卡片与列操作 ================
 
-  private createCard(columnIndex: number): void {
+  private createCard(column: string): void {
     const doc = this.doc;
     if (!doc) return;
-    const card = newCard("");
-    this.mutate(() => insertCard(doc, columnIndex, card));
+    const card = newCard(column);
+    this.mutate(() => insertCard(doc, column, card));
     this.startTitleEdit(card.id);
   }
 
@@ -630,11 +630,13 @@ export class BoardView extends FileView {
     this.mutate(() => deleteCards(doc, ids));
   }
 
-  private dropCards(ids: string[], columnIndex: number, beforeKey: string | null): void {
+  private dropCards(ids: string[], columnIndex: number, beforeId: string | null): void {
     const doc = this.doc;
     if (!doc) return;
     this.selection.clear();
-    this.mutate(() => moveCards(doc, ids, columnIndex, beforeKey));
+    const column = doc.columns[columnIndex];
+    if (!column) return;
+    this.mutate(() => moveCards(doc, ids, column, beforeId));
   }
 
   private moveAdjacent(ids: string[], delta: number): void {
@@ -696,11 +698,11 @@ export class BoardView extends FileView {
     menu.showAtMouseEvent(event);
   }
 
-  private showColumnMenu(index: number, event: MouseEvent): void {
+  private showColumnMenu(column: string, event: MouseEvent): void {
     const doc = this.doc;
     if (!doc) return;
-    const column = doc.columns[index];
-    if (!column) return;
+    const index = doc.columns.indexOf(column);
+    if (index < 0) return;
 
     const menu = new Menu();
     menu.addItem((item) =>
@@ -721,16 +723,13 @@ export class BoardView extends FileView {
     );
     menu.addItem((item) =>
       item.setTitle("清除本列已完成").setIcon("check").onClick(() => {
-        this.mutate(() => clearDone(doc, index));
+        this.mutate(() => clearDone(doc, column));
       }),
     );
     menu.addSeparator();
     menu.addItem((item) =>
       item.setTitle("删除本列").setIcon("trash").onClick(() => {
-        this.mutate(() => {
-          removeColumn(doc, index);
-          return true;
-        });
+        this.mutate(() => removeColumn(doc, column));
       }),
     );
     menu.showAtMouseEvent(event);
@@ -750,17 +749,15 @@ export class BoardView extends FileView {
     if (!doc || !file) return null;
     const card = findCard(doc, id);
     if (!card) return null;
-    const columnIndex = findColumnOf(doc, id);
     return {
       id,
-      title: card.text,
-      body: bodyForEditing(card),
-      tags: cardTags(card),
+      title: card.title,
+      body: card.body,
+      tags: card.tags,
       done: card.done,
-      columnIndex,
-      columnTitle: doc.columns[columnIndex]?.title ?? "",
-      columns: doc.columns.map((column) => column.title),
-      boardName: file.basename,
+      column: card.column,
+      columns: doc.columns,
+      boardName: file.basename.replace(/\.board$/, ""),
       filePath: file.path,
     };
   }
@@ -779,8 +776,9 @@ export class BoardView extends FileView {
         card.dirty = true;
         changed = true;
       }
-      if (patch.columnIndex !== undefined && patch.columnIndex !== findColumnOf(doc, card.id)) {
-        changed = moveCards(doc, [card.id], patch.columnIndex, null) || changed;
+      if (patch.tags !== undefined && setCardTags(card, patch.tags)) changed = true;
+      if (patch.column !== undefined && patch.column !== card.column) {
+        changed = moveCards(doc, [card.id], patch.column, null) || changed;
       }
       return changed;
     });
@@ -840,6 +838,6 @@ export class BoardView extends FileView {
 
   /** 未使用但保留：抽屉可能要求刷新整表。 */
   cardCount(): number {
-    return this.doc ? allCards(this.doc).length : 0;
+    return this.doc ? this.doc.cards.length : 0;
   }
 }

@@ -1,5 +1,4 @@
 import { DropdownComponent, Notice, ToggleComponent, setIcon } from "obsidian";
-import { stripTags } from "../board/filter";
 import type { CardPatch, CardSnapshot } from "../view";
 
 export interface CardEditorHost {
@@ -142,10 +141,10 @@ export class CardEditor {
     const card = this.current();
     if (!card) return;
 
-    this.crumbEl.setText(`${card.boardName} · ${card.columnTitle}`);
-    // 标题只放标题，标签由 chip 行承担；写回时再拼成一行
+    this.crumbEl.setText(`${card.boardName} · ${card.column}`);
+    // 标题框只放标题，标签是独立字段，由下面的 chip 行承担
     this.tags = card.tags;
-    if (force || document.activeElement !== this.titleEl) this.titleEl.value = stripTags(card.title);
+    if (force || document.activeElement !== this.titleEl) this.titleEl.value = card.title;
     if (force || document.activeElement !== this.bodyEl) this.bodyEl.value = card.body;
     this.renderProps(card);
     this.renderTags();
@@ -164,12 +163,10 @@ export class CardEditor {
     const status = statusRow.createDiv({ cls: "sb-prop-value" });
     new DropdownComponent(status)
       .addOptions(
-        Object.fromEntries(
-          card.columns.map((title, index) => [String(index), title || `第 ${index + 1} 列`]),
-        ),
+        Object.fromEntries(card.columns.map((name) => [name, name || "未命名"])),
       )
-      .setValue(String(card.columnIndex))
-      .onChange((value) => this.schedule({ columnIndex: Number(value) }));
+      .setValue(card.column)
+      .onChange((value) => this.schedule({ column: value }));
 
     const doneRow = this.propsEl.createDiv({ cls: "sb-prop" });
     doneRow.createDiv({ cls: "sb-prop-label", text: "完成" });
@@ -183,10 +180,10 @@ export class CardEditor {
     for (const chip of [...this.tagsEl.querySelectorAll(".sb-tag")]) chip.remove();
     for (const tag of this.tags) {
       const chip = this.tagsEl.createDiv({ cls: "sb-tag" });
-      chip.createSpan({ text: tag });
+      chip.createSpan({ text: `#${tag}` });
       const close = chip.createEl("button", {
         cls: "sb-tag-remove",
-        attr: { "aria-label": `移除 ${tag}` },
+        attr: { "aria-label": `移除 #${tag}` },
       });
       setIcon(close, "x");
       close.addEventListener("click", () => this.removeTag(tag));
@@ -196,30 +193,28 @@ export class CardEditor {
 
   // ================ 编辑动作 ================
 
+  /** 标题框里手打的 `#标签` 由 setCardTitle 抽到 tags，这里只交标题原文。 */
   private composeTitle(): string {
-    const title = stripTags(this.titleEl.value);
-    return [title, ...this.tags].filter(Boolean).join(" ");
+    return this.titleEl.value.trim();
   }
 
   private addTag(raw: string): void {
     const value = raw.trim().replace(/^#/, "").replace(/\s+/g, "-");
-    if (!value) return;
+    if (!value || this.tags.includes(value)) return;
     this.tagInputEl.value = "";
-    const tag = `#${value}`;
-    if (this.tags.includes(tag)) return;
-    this.tags.push(tag);
+    this.tags.push(value);
     this.renderTags();
-    this.flushTitle();
+    this.flushTags();
   }
 
   private removeTag(tag: string): void {
     this.tags = this.tags.filter((item) => item !== tag);
     this.renderTags();
-    this.flushTitle();
+    this.flushTags();
   }
 
-  private flushTitle(): void {
-    this.schedule({ title: this.composeTitle() });
+  private flushTags(): void {
+    this.schedule({ tags: [...this.tags] });
     this.flush();
   }
 

@@ -1,137 +1,51 @@
-import type { BoardDoc, Card, Column } from "./model";
-import { isCard, keyOf } from "./model";
+import { readTags, withoutTags } from "./filter";
+import { cardsOf, type BoardDoc, type Card } from "./model";
 
 /**
- * 所有操作都在原地改模型，返回是否真的改动了结构。
+ * 所有操作都在原地改模型，返回是否真的改动了内容。
  * 调用方负责序列化与写盘：模型没有隐藏状态，serializeDoc 是唯一出口。
  */
 
+/** 换列与落点：改 `column` 字段，并把卡片挪到 anchor 之前（null = 落到底）。 */
 export function moveCards(
   doc: BoardDoc,
   ids: string[],
-  columnIndex: number,
-  beforeKey: string | null,
+  column: string,
+  beforeId: string | null,
 ): boolean {
-  const target = doc.columns[columnIndex];
-  if (!target || ids.length === 0) return false;
+  if (ids.length === 0 || !doc.columns.includes(column)) return false;
+  const moving = doc.cards.filter((card) => ids.includes(card.id));
+  if (moving.length === 0) return false;
 
-  const moving = new Set(ids);
-  const collected: Card[] = [];
-  for (const column of doc.columns) {
-    for (const item of column.items) {
-      if (isCard(item) && moving.has(item.id)) collected.push(item);
-    }
-  }
-  if (collected.length === 0) return false;
-
-  const anchor = resolveAnchor(target.items, beforeKey, moving);
-
-  for (const column of doc.columns) {
-    column.items = column.items.filter((item) => !(isCard(item) && moving.has(item.id)));
-  }
-
-  const at = anchor === null ? -1 : target.items.findIndex((item) => keyOf(item) === anchor);
-  if (at < 0) target.items.push(...collected);
-  else target.items.splice(at, 0, ...collected);
-  return true;
-}
-
-/** 落点若指向被拖动的卡片本身，顺延到它之后第一个不动的项。 */
-function resolveAnchor(
-  items: BoardDoc["columns"][number]["items"],
-  beforeKey: string | null,
-  moving: Set<string>,
-): string | null {
-  if (!beforeKey) return null;
-  const index = items.findIndex((item) => keyOf(item) === beforeKey);
-  if (index < 0) return null;
-  const hit = items[index];
-  if (!isCard(hit) || !moving.has(hit.id)) return beforeKey;
-  for (let i = index + 1; i < items.length; i++) {
-    const item = items[i];
-    if (!(isCard(item) && moving.has(item.id))) return keyOf(item);
-  }
-  return null;
-}
-
-export function insertCard(doc: BoardDoc, columnIndex: number, card: Card): boolean {
-  const column = doc.columns[columnIndex];
-  if (!column) return false;
-  column.items.push(card);
-  return true;
-}
-
-export function deleteCards(doc: BoardDoc, ids: string[]): boolean {
-  const drop = new Set(ids);
   let changed = false;
-  for (const column of doc.columns) {
-    const kept = column.items.filter((item) => !(isCard(item) && drop.has(item.id)));
-    if (kept.length !== column.items.length) {
+  for (const card of moving) {
+    if (card.column !== column) {
+      card.column = column;
+      card.dirty = true;
       changed = true;
-      column.items = kept;
     }
+  }
+
+  const from = beforeId === null ? -1 : doc.cards.findIndex((card) => card.id === beforeId);
+  const movingIds = new Set(ids);
+  // 落点指着被拖动的卡片自己：顺延到它之后第一张不动的卡
+  let anchor: Card | null = null;
+  for (let i = from; i >= 0 && i < doc.cards.length; i++) {
+    const candidate = doc.cards[i];
+    if (!movingIds.has(candidate.id)) {
+      anchor = candidate;
+      break;
+    }
+  }
+  const rest = doc.cards.filter((card) => !ids.includes(card.id));
+  let at = anchor ? rest.indexOf(anchor) : rest.length;
+  if (at < 0) at = rest.length;
+  const next = [...rest.slice(0, at), ...moving, ...rest.slice(at)];
+  if (next.some((card, index) => card !== doc.cards[index])) {
+    doc.cards = next;
+    changed = true;
   }
   return changed;
-}
-
-export function toggleDone(card: Card): void {
-  card.done = !card.done;
-  card.dirty = true;
-}
-
-export function setCardTitle(card: Card, title: string): boolean {
-  const text = title.trimEnd();
-  if (text === card.text) return false;
-  card.text = text;
-  card.dirty = true;
-  return true;
-}
-
-/**
- * 正文在文件里是卡片下一级的缩进块。编辑器只面对去掉一级缩进的文本，
- * 写回时统一补一级，这样界面里不会出现凭空多出来的制表符。
- */
-const ONE_LEVEL = /^(?:\t| {1,4})/;
-
-function stripOneLevel(line: string, indent: string): string {
-  const withoutCardIndent = line.startsWith(indent) ? line.slice(indent.length) : line;
-  return withoutCardIndent.replace(ONE_LEVEL, "");
-}
-
-export function bodyForEditing(card: Card): string {
-  return card.body.map((line) => stripOneLevel(line, card.indent)).join("\n");
-}
-
-export function setCardBody(card: Card, body: string): boolean {
-  const raw = body.replace(/\n+$/, "");
-  const next =
-    raw === ""
-      ? []
-      : raw.split("\n").map((line) =>
-          line === "" ? "" : `${card.indent}\t${stripOneLevel(line, card.indent)}`,
-        );
-  if (next.join("\n") === card.body.join("\n")) return false;
-  card.body = next;
-  card.dirty = true;
-  return true;
-}
-
-export function addColumn(doc: BoardDoc, title = "新列", index = doc.columns.length): Column {
-  const column: Column = { title, headingRaw: `## ${title}`, items: [] };
-  doc.columns.splice(Math.min(Math.max(index, 0), doc.columns.length), 0, column);
-  return column;
-}
-
-export function renameColumn(column: Column, title: string): void {
-  column.title = title;
-  column.headingRaw = `## ${title}`;
-}
-
-export function removeColumn(doc: BoardDoc, index: number): Card[] {
-  const column = doc.columns[index];
-  if (!column) return [];
-  doc.columns.splice(index, 1);
-  return column.items.filter(isCard);
 }
 
 export function moveCardsToAdjacentColumn(
@@ -139,25 +53,113 @@ export function moveCardsToAdjacentColumn(
   ids: string[],
   delta: number,
 ): boolean {
-  if (ids.length === 0) return false;
-  const first = doc.columns.findIndex((column) =>
-    column.items.some((item) => isCard(item) && ids.includes(item.id)),
-  );
-  const target = first + delta;
-  if (first < 0 || target < 0 || target >= doc.columns.length) return false;
-  return moveCards(doc, ids, target, null);
+  const first = doc.cards.find((card) => ids.includes(card.id));
+  if (!first) return false;
+  const target = doc.columns.indexOf(first.column) + delta;
+  if (target < 0 || target >= doc.columns.length) return false;
+  return moveCards(doc, ids, doc.columns[target], null);
 }
 
-export function clearDone(doc: BoardDoc, columnIndex?: number): boolean {
-  const scope = columnIndex === undefined ? doc.columns : [doc.columns[columnIndex]];
-  let changed = false;
-  for (const column of scope) {
-    if (!column) continue;
-    const kept = column.items.filter((item) => !(isCard(item) && item.done));
-    if (kept.length !== column.items.length) {
-      changed = true;
-      column.items = kept;
-    }
+export function insertCard(doc: BoardDoc, column: string, card: Card): boolean {
+  if (!doc.columns.includes(column)) return false;
+  card.column = column;
+  doc.cards.push(card);
+  return true;
+}
+
+export function deleteCards(doc: BoardDoc, ids: string[]): boolean {
+  const before = doc.cards.length;
+  doc.cards = doc.cards.filter((card) => !ids.includes(card.id));
+  return doc.cards.length !== before;
+}
+
+export function toggleDone(card: Card): void {
+  card.done = !card.done;
+  card.dirty = true;
+}
+
+/** 标题里手打的 `#标签` 仍然认：抽成 tags，标题只留正文。 */
+export function setCardTitle(card: Card, title: string): boolean {
+  const inline = readTags(title);
+  const text = withoutTags(title).trimEnd();
+  const tags = mergeTags(card.tags, inline);
+  if (text === card.title && sameTags(tags, card.tags)) return false;
+  card.title = text;
+  card.tags = tags;
+  card.dirty = true;
+  return true;
+}
+
+export function setCardTags(card: Card, tags: string[]): boolean {
+  const next = mergeTags([], tags);
+  if (sameTags(next, card.tags)) return false;
+  card.tags = next;
+  card.dirty = true;
+  return true;
+}
+
+export function setCardBody(card: Card, body: string): boolean {
+  const next = body.replace(/\s+$/, "").replace(/^\n+/, "");
+  if (next === card.body) return false;
+  card.body = next;
+  card.dirty = true;
+  return true;
+}
+
+export function setCardColumn(card: Card, column: string): boolean {
+  if (card.column === column) return false;
+  card.column = column;
+  card.dirty = true;
+  return true;
+}
+
+export function addColumn(doc: BoardDoc, title = "新列", index = doc.columns.length): string {
+  let name = title.trim() || "新列";
+  let suffix = 2;
+  while (doc.columns.includes(name)) name = `${title} ${suffix++}`;
+  doc.columns.splice(Math.min(Math.max(index, 0), doc.columns.length), 0, name);
+  return name;
+}
+
+/** 换列名要连带改掉卡片里的引用，一次改完，别留下指向不存在列的卡。 */
+export function renameColumn(doc: BoardDoc, from: string, to: string): boolean {
+  const name = to.trim();
+  const index = doc.columns.indexOf(from);
+  if (index < 0 || !name || name === from || doc.columns.includes(name)) return false;
+  doc.columns[index] = name;
+  for (const card of cardsOf(doc, from)) {
+    card.column = name;
+    card.dirty = true;
   }
-  return changed;
+  return true;
+}
+
+/** 删列连带删掉列里的卡片：没有列可以容纳它们。 */
+export function removeColumn(doc: BoardDoc, column: string): boolean {
+  const index = doc.columns.indexOf(column);
+  if (index < 0) return false;
+  doc.columns.splice(index, 1);
+  doc.cards = doc.cards.filter((card) => card.column !== column);
+  return true;
+}
+
+export function clearDone(doc: BoardDoc, column?: string): boolean {
+  const before = doc.cards.length;
+  doc.cards = doc.cards.filter(
+    (card) => !card.done || (column !== undefined && card.column !== column),
+  );
+  return doc.cards.length !== before;
+}
+
+function mergeTags(base: string[], extra: string[]): string[] {
+  const out: string[] = [];
+  for (const tag of [...base, ...extra]) {
+    const value = tag.trim().replace(/^#/, "");
+    if (value && !out.includes(value)) out.push(value);
+  }
+  return out;
+}
+
+function sameTags(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((tag, index) => tag === b[index]);
 }
