@@ -30,6 +30,7 @@ import {
 } from "./board/ops";
 import { newCard } from "./board/parse";
 import { serializeDoc } from "./board/serialize";
+import { plainText } from "./board/text";
 import { CardEditor } from "./ui/card-editor";
 import { installGestures } from "./ui/drag";
 import type { BoardDensity } from "./settings";
@@ -623,17 +624,16 @@ export class BoardView extends FileView {
 
     const content = el.createDiv({ cls: "sb-card-content" });
     const text = content.createDiv({ cls: "sb-card-text" });
+    // 卡片上只用纯文本：渲染过的正文会比标题还像标题
     if (card.title) {
-      // 删除线交给 Markdown 的 <del>，比给容器加 text-decoration 更可靠
-      const source = card.done ? `~~${card.title}~~` : card.title;
-      void MarkdownRenderer.render(this.app, source, text, this.boardFile?.path ?? "", this);
+      text.setText(card.title);
     } else {
       text.createSpan({ cls: "sb-card-empty", text: "空卡片" });
     }
 
-    if (card.body.trim() !== "") {
-      const extra = content.createDiv({ cls: "sb-card-extra" });
-      void MarkdownRenderer.render(this.app, card.body, extra, this.boardFile?.path ?? "", this);
+    const preview = plainText(card.body);
+    if (preview !== "") {
+      content.createDiv({ cls: "sb-card-extra", text: preview });
     }
 
     if (card.tags.length > 0) {

@@ -1,6 +1,11 @@
 import { DropdownComponent, Notice, ToggleComponent, setIcon } from "obsidian";
 import type { CardPatch, CardSnapshot } from "../view";
 
+type BodyMode = "edit" | "preview" | "compare";
+
+const BODY_MODES: BodyMode[] = ["edit", "preview", "compare"];
+const BODY_LABEL: Record<BodyMode, string> = { edit: "编辑", preview: "预览", compare: "对比" };
+
 export interface CardEditorHost {
   snapshot(id: string): (CardSnapshot & { filePath: string }) | null;
   applyPatch(id: string, patch: CardPatch): void;
@@ -25,9 +30,11 @@ export class CardEditor {
   private tagsEl!: HTMLElement;
   private tagInputEl!: HTMLInputElement;
   private bodyEl!: HTMLTextAreaElement;
+  private bodyWrapEl!: HTMLElement;
   private previewEl!: HTMLElement;
-  private bodyTabs: Record<"edit" | "preview", HTMLElement> | null = null;
-  private bodyMode: "edit" | "preview" = "edit";
+  private segButtons = new Map<BodyMode, HTMLElement>();
+  private bodyMode: BodyMode = "edit";
+  private previewTimer: number | null = null;
 
   constructor(
     private readonly container: HTMLElement,
@@ -105,25 +112,32 @@ export class CardEditor {
       this.addTag(this.tagInputEl.value);
     });
 
-    const bodyWrap = this.container.createDiv({ cls: "sb-body" });
-    const bodyHead = bodyWrap.createDiv({ cls: "sb-body-head" });
-    const editTab = bodyHead.createEl("button", { cls: "sb-tab is-active", text: "编辑" });
-    const previewTab = bodyHead.createEl("button", { cls: "sb-tab", text: "预览" });
-    this.bodyTabs = { edit: editTab, preview: previewTab };
-    editTab.addEventListener("click", () => this.setBodyMode("edit"));
-    previewTab.addEventListener("click", () => this.setBodyMode("preview"));
+    this.bodyWrapEl = this.container.createDiv({ cls: "sb-body" });
+    this.bodyWrapEl.dataset.mode = "edit";
 
-    this.bodyEl = bodyWrap.createEl("textarea", {
+    const seg = this.bodyWrapEl.createDiv({ cls: "sb-seg" });
+    for (const mode of BODY_MODES) {
+      const button = seg.createEl("button", { cls: "sb-seg-btn", text: BODY_LABEL[mode] });
+      if (mode === "edit") button.addClass("is-active");
+      button.addEventListener("click", () => this.setBodyMode(mode));
+      this.segButtons.set(mode, button);
+    }
+
+    const panes = this.bodyWrapEl.createDiv({ cls: "sb-panes" });
+    this.bodyEl = panes.createEl("textarea", {
       cls: "sb-peek-body",
       attr: { rows: "6", placeholder: "正文（Markdown，可多行）", spellcheck: "false" },
     });
-    this.previewEl = bodyWrap.createDiv({
-      cls: "sb-body-preview markdown-rendered is-hidden",
-    });
+    this.previewEl = panes.createDiv({ cls: "sb-body-preview markdown-rendered" });
 
     this.bodyEl.addEventListener("input", () => {
       this.autoGrow(this.bodyEl);
       this.schedule({ body: this.bodyEl.value });
+      // 对比模式边打边看，慢一点渲染，别抢输入
+      if (this.bodyMode === "compare") {
+        if (this.previewTimer !== null) window.clearTimeout(this.previewTimer);
+        this.previewTimer = window.setTimeout(() => this.renderPreview(), 180);
+      }
     });
     this.bodyEl.addEventListener("keydown", (event) => {
       if (event.key !== "Tab") return;
@@ -160,12 +174,13 @@ export class CardEditor {
 
     this.crumbEl.setText(`${card.boardName} · ${card.column}`);
     // 标题框只放标题，标签是独立字段，由下面的 chip 行承担
-    this.tags = card.tags;
+    // 拷一份：直接引用模型数组的话，push 会绕过 setCardTags 的变更检测
+    this.tags = [...card.tags];
     if (force || document.activeElement !== this.titleEl) this.titleEl.value = card.title;
     if (force || document.activeElement !== this.bodyEl) this.bodyEl.value = card.body;
     this.renderProps(card);
     this.renderTags();
-    if (this.bodyMode === "preview") this.renderPreview();
+    if (this.bodyMode !== "edit") this.renderPreview();
 
     window.requestAnimationFrame(() => {
       this.autoGrow(this.titleEl);
@@ -173,13 +188,11 @@ export class CardEditor {
     });
   }
 
-  /** 正文两种看法：编辑原文，或渲染成 Markdown。 */
-  private setBodyMode(mode: "edit" | "preview"): void {
+  /** 正文三种看法：原文、渲染结果，或左右分屏同时看。 */
+  private setBodyMode(mode: BodyMode): void {
     this.bodyMode = mode;
-    this.bodyTabs?.edit.toggleClass("is-active", mode === "edit");
-    this.bodyTabs?.preview.toggleClass("is-active", mode === "preview");
-    this.bodyEl.toggleClass("is-hidden", mode === "preview");
-    this.previewEl.toggleClass("is-hidden", mode === "edit");
+    this.bodyWrapEl.dataset.mode = mode;
+    for (const [key, button] of this.segButtons) button.toggleClass("is-active", key === mode);
     if (mode === "edit") {
       this.bodyEl.focus({ preventScroll: true });
       this.autoGrow(this.bodyEl);
@@ -187,6 +200,7 @@ export class CardEditor {
     }
     this.flush();
     this.renderPreview();
+    if (mode === "compare") this.autoGrow(this.bodyEl);
   }
 
   private renderPreview(): void {
@@ -249,12 +263,15 @@ export class CardEditor {
     this.tags.push(value);
     this.renderTags();
     this.flushTags();
+    // chip 行重建会把输入框挪进 DOM，焦点会掉，粘回来好接着敲
+    this.tagInputEl.focus({ preventScroll: true });
   }
 
   private removeTag(tag: string): void {
     this.tags = this.tags.filter((item) => item !== tag);
     this.renderTags();
     this.flushTags();
+    this.tagInputEl.focus({ preventScroll: true });
   }
 
   private flushTags(): void {
