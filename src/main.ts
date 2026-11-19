@@ -52,6 +52,7 @@ export default class SimpleBoardPlugin extends Plugin {
               .setIcon("layout-dashboard")
               .onClick(() => void this.createBoard(file.path)),
           );
+          this.groupWithNewItems("新建看板", "新建笔记");
           return;
         }
         if (!(file instanceof TFile) || !isBoardPath(file.path)) return;
@@ -160,6 +161,33 @@ export default class SimpleBoardPlugin extends Plugin {
     if (this.markdownPref.has(file.path)) return;
     if ((leaf.view as MarkdownView).file?.path !== file.path) return;
     await this.openAsBoard(file);
+  }
+
+  /**
+   * 插件只能把菜单项追加到末尾，而「新建看板」该和「新建笔记」排在一起。
+   * 菜单渲染出来后把这一项挪进那一组：菜单是 Obsidian 自己排的 DOM，
+   * 认不到目标分组就保持原样，不会把菜单弄坏。
+   */
+  private groupWithNewItems(itemText: string, anchorText: string): void {
+    window.setTimeout(() => {
+      const menus = document.querySelectorAll<HTMLElement>(".menu-scroll");
+      const menuEl = menus[menus.length - 1];
+      if (!menuEl) return;
+      const item = [...menuEl.querySelectorAll<HTMLElement>(".menu-item")].find(
+        (el) => el.textContent?.trim() === itemText,
+      );
+      if (!item) return;
+      const host = item.closest<HTMLElement>(".menu-group");
+      const anchor = [...menuEl.querySelectorAll<HTMLElement>(".menu-group")].find(
+        (el) => el !== host && (el.textContent ?? "").includes(anchorText),
+      );
+      if (!host || !anchor) return;
+      anchor.appendChild(item);
+      if (host.children.length > 0) return;
+      const before = host.previousElementSibling;
+      host.remove();
+      if (before?.classList.contains("menu-separator")) before.remove();
+    }, 0);
   }
 
   private activeFolder(): string {
