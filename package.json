@@ -1,7 +1,7 @@
 {
   "name": "obsidian-simple-board",
   "version": "0.1.0",
-  "description": "轻量看板：单文件 Markdown 存储，指针拖拽、多选批量移动、过滤，跟随主题配色。",
+  "description": "Obsidian 轻量看板：.board.md 文件 + 自描述 YAML 结构块，卡片拖拽、多选批量移动与过滤。",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

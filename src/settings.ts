@@ -55,7 +55,7 @@ export class BoardSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("自动用看板视图打开")
-      .setDesc("打开带 board: true 的笔记时切换到看板视图。")
+      .setDesc("打开 .board.md 文件时用看板视图显示。")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.autoOpen).onChange(async (value) => {
           this.plugin.settings.autoOpen = value;
