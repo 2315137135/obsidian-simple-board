@@ -745,15 +745,18 @@ input.sb-tag-input:focus {
   gap: 2px;
   padding: 2px;
   margin-bottom: 8px;
-  background: var(--background-secondary);
+  background: var(--background-secondary-alt);
+  border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
 }
 
-.sb-seg-btn {
-  padding: 2px 10px;
+/* 两段选择器：Obsidian 的 `button:not(.clickable-icon)` 权重比单个类高，压不住 */
+.sb-seg .sb-seg-btn {
+  padding: 2px 12px;
   font-size: var(--font-ui-smaller);
-  line-height: 1.5;
-  color: var(--text-muted);
+  font-weight: 400;
+  line-height: 1.6;
+  color: var(--text-faint);
   background: transparent;
   border: none;
   border-radius: var(--radius-s);
@@ -761,14 +764,15 @@ input.sb-tag-input:focus {
   cursor: pointer;
 }
 
-.sb-seg-btn:hover {
+.sb-seg .sb-seg-btn:hover {
   color: var(--text-normal);
+  background: transparent;
 }
 
-.sb-seg-btn.is-active {
-  color: var(--text-normal);
-  background: var(--background-primary);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+.sb-seg .sb-seg-btn.is-active {
+  font-weight: 600;
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
 }
 
 .sb-body[data-mode="preview"] .sb-peek-body {
