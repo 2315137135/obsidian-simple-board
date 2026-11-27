@@ -9,6 +9,8 @@ export interface CardEditorHost {
   snapshot(id: string): (CardSnapshot & { filePath: string }) | null;
   applyPatch(id: string, patch: CardPatch): void;
   remove(id: string): void;
+  archive(id: string): void;
+  restore(id: string): void;
   close(): void;
   /** 把 Markdown 渲染进给定容器（正文预览用）。 */
   render(source: string, el: HTMLElement): void;
@@ -37,6 +39,7 @@ export class CardEditor {
   private segButtons = new Map<BodyMode, HTMLElement>();
   private bodyMode: BodyMode = "edit";
   private previewTimer: number | null = null;
+  private archiveEl!: HTMLButtonElement;
 
   constructor(
     private readonly container: HTMLElement,
@@ -50,6 +53,7 @@ export class CardEditor {
   }
 
   open(cardId: string): void {
+    this.flush();
     this.cardId = cardId;
     this.render(true);
   }
@@ -159,6 +163,15 @@ export class CardEditor {
       void navigator.clipboard.writeText(`[[${card.boardName}#^${card.id}]]`);
       new Notice("已复制块链接");
     });
+    this.archiveEl = actions.createEl("button", { cls: "sb-tool", text: "归档" });
+    this.archiveEl.addEventListener("click", () => {
+      this.flush();
+      const card = this.current();
+      if (card) {
+        if (card.archived) this.host.restore(card.id);
+        else this.host.archive(card.id);
+      }
+    });
     const remove = actions.createEl("button", { cls: "sb-tool sb-tool-danger", text: "删除卡片" });
     remove.addEventListener("click", () => {
       if (this.cardId) this.host.remove(this.cardId);
@@ -176,7 +189,8 @@ export class CardEditor {
     const card = this.current();
     if (!card) return;
 
-    this.crumbEl.setText(`${card.boardName} · ${card.column}`);
+    this.crumbEl.setText(`${card.boardName} · ${card.column}${card.archived ? ` · 已归档${card.archivedAt ? ` ${card.archivedAt}` : ""}` : ""}`);
+    this.archiveEl.setText(card.archived ? "恢复到看板" : "归档");
     // 标题框只放标题，标签是独立字段，由下面的 chip 行承担
     // 拷一份：直接引用模型数组的话，push 会绕过 setCardTags 的变更检测
     this.tags = [...card.tags];
@@ -226,7 +240,7 @@ export class CardEditor {
     const status = statusRow.createDiv({ cls: "sb-prop-value" });
     new DropdownComponent(status)
       .addOptions(
-        Object.fromEntries(card.columns.map((name) => [name, name || "未命名"])),
+        Object.fromEntries([...new Set([card.column, ...card.columns])].map((name) => [name, name || "未命名"])),
       )
       .setValue(card.column)
       .onChange((value) => this.schedule({ column: value }));
@@ -290,7 +304,7 @@ export class CardEditor {
     this.saveTimer = window.setTimeout(() => this.flush(), 300);
   }
 
-  private flush(): void {
+  flush(): void {
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;

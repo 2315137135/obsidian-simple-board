@@ -64,7 +64,7 @@ export function installGestures(host: DragHost): () => void {
       updateDrag(host, drag, event);
       return;
     }
-    if (!press) return;
+    if (!press || host.columns().length === 0) return;
     if (Math.hypot(event.clientX - press.startX, event.clientY - press.startY) < DRAG_THRESHOLD) {
       return;
     }

@@ -10,6 +10,8 @@ import {
 } from "../src/board/model";
 import {
   addColumn,
+  archiveCards,
+  restoreCards,
   clearDone,
   deleteCards,
   insertCard,
@@ -29,7 +31,7 @@ import { serializeDoc } from "../src/board/serialize";
 function load(text: string): BoardDoc {
   const parts = splitBoard(text);
   const data = parts.yaml === null ? null : yamlLoad(parts.yaml);
-  return buildDoc(data, parts);
+  return buildDoc(data, parts, parts.archiveYaml === null ? null : yamlLoad(parts.archiveYaml));
 }
 
 function makeDoc(): BoardDoc {
@@ -37,6 +39,7 @@ function makeDoc(): BoardDoc {
     version: FORMAT_VERSION,
     columns: ["待办", "进行中", "已完成"],
     cards: [],
+    archived: [],
     orphans: [],
   };
 }
@@ -118,7 +121,9 @@ describe("文件格式", () => {
       "",
     ].join("\n");
     const doc = load(source);
-    expect(serializeDoc(doc)).toBe(source);
+    const saved = serializeDoc(doc);
+    expect(saved).toContain("  - {id: abc123, column: 待办, title: 手写格式}");
+    expect(serializeDoc(load(saved))).toBe(saved);
   });
 
   it("认得出手写的块式写法，保存时改成一行", () => {
@@ -239,6 +244,52 @@ describe("文件格式", () => {
     ].join("\n");
     const doc = load(source);
     expect(doc.cards[0].body).toBe("正文");
+  });
+});
+
+describe("归档与按需阅读", () => {
+  const source = [
+    "```yaml board", "version: 1", "columns: [待办, 已完成]", "cards:",
+    "  - {id: a1, column: 待办, title: 当前任务}",
+    "  - {id: a2, column: 已完成, title: 已验收, done: true}", "```", "",
+    "<!--card a2-->", "", "保留末尾空格  ", "", "<!--/card-->", "",
+    "手写备注", "", "<!--card a1-->", "当前正文", "<!--/card-->", "",
+    "<!--card ghost-->", "未挂接正文", "<!--/card-->", "",
+  ].join("\n");
+  const bodyArea = (text: string): string => text.split("<!--board:bodies-start-->\n")[1].split("\n```yaml board-archive")[0];
+
+  it("归档、换列、恢复只移动索引，正文与孤立段落保持原样", () => {
+    const doc = load(source);
+    const before = serializeDoc(doc);
+    expect(archiveCards(doc, ["a2"], "2026-11-25")).toBe(true);
+    const archived = serializeDoc(doc);
+    expect(archived.split("<!--board:active-end-->")[0]).not.toContain("id: a2");
+    expect(bodyArea(archived)).toBe(bodyArea(before));
+    expect(archived).toContain("保留末尾空格  \n\n<!--/card-->");
+    const reopened = load(archived);
+    expect(reopened.archived[0]).toMatchObject({ id: "a2", done: true, archivedAt: "2026-11-25" });
+    expect(serializeDoc(reopened)).toBe(archived);
+    moveCards(reopened, ["a1"], "已完成", null);
+    expect(restoreCards(reopened, ["a2"])).toBe(true);
+    const restored = serializeDoc(reopened);
+    expect(bodyArea(restored)).toBe(bodyArea(before));
+    expect(load(restored).archived).toEqual([]);
+    expect(restored).not.toContain("archived_at:");
+  });
+
+  it("头部补白、全归档与原列删除后的恢复能往返", () => {
+    const doc = load(source);
+    archiveCards(doc, ["a1", "a2"]);
+    removeColumn(doc, "已完成");
+    const saved = serializeDoc(doc);
+    expect(saved.split("\n").slice(0, 100).join("\n")).not.toContain("当前正文");
+    expect(saved).toContain("cards: []");
+    const reopened = load(saved);
+    expect(reopened.archived).toHaveLength(2);
+    expect(reopened.archived[1].column).toBe("已完成");
+    restoreCards(reopened, ["a2"]);
+    expect(reopened.cards[0]).toMatchObject({ id: "a2", column: "待办", done: true });
+    expect(load(serializeDoc(reopened)).archived).toHaveLength(1);
   });
 });
 

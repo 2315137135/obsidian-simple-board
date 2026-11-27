@@ -118,6 +118,7 @@ export default class SimpleBoardPlugin extends Plugin {
       version: FORMAT_VERSION,
       columns: ["待办", "进行中", "已完成"],
       cards: [newCard("待办", "第一张卡片")],
+      archived: [],
       orphans: [],
     };
     const file = await this.app.vault.create(path, serializeDoc(doc));
@@ -125,6 +126,7 @@ export default class SimpleBoardPlugin extends Plugin {
   }
 
   async openAsBoard(file: TFile): Promise<void> {
+    if (!isBoardPath(file.path)) return;
     this.markdownPref.delete(file.path);
     this.switching = true;
     try {

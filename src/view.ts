@@ -11,11 +11,12 @@ import {
 import type SimpleBoardPlugin from "./main";
 import { EMPTY_FILTER, cardMatches, type FilterState } from "./board/filter";
 import type { BoardDoc, Card } from "./board/model";
-import { cardsOf, findCard } from "./board/model";
+import { cardsOf, findCard, isBoardPath } from "./board/model";
 import { parseBoardFile } from "./board/io";
 import {
   addColumn,
-  clearDone,
+  archiveCards,
+  restoreCards,
   deleteCards,
   insertCard,
   moveCards,
@@ -44,6 +45,8 @@ export interface CardSnapshot {
   body: string;
   tags: string[];
   done: boolean;
+  archived: boolean;
+  archivedAt?: string;
   column: string;
   columns: string[];
   boardName: string;
@@ -70,6 +73,8 @@ const DENSITY_CLASS: Record<BoardDensity, string> = {
 
 export class BoardView extends FileView {
   private doc: BoardDoc | null = null;
+  private loadedFile: TFile | null = null;
+  private loadVersion = 0;
   private filter: FilterState = { ...EMPTY_FILTER };
   private selection = new Set<string>();
   private history: string[] = [];
@@ -83,6 +88,8 @@ export class BoardView extends FileView {
   private columnsEl!: HTMLElement;
   private searchEl!: HTMLInputElement;
   private doneEl!: HTMLButtonElement;
+  private archiveEl!: HTMLButtonElement;
+  private archiveOpen = false;
   private batchEl!: HTMLElement;
   private scrollLeft = 0;
   private columnScroll = new Map<number, number>();
@@ -108,8 +115,9 @@ export class BoardView extends FileView {
     return "layout-dashboard";
   }
 
-  override canAcceptExtension(extension: string): boolean {
-    return extension === "md";
+  override canAcceptExtension(_extension: string): boolean {
+    // 扩展名 md 无法区分看板和普通笔记；看板由插件按完整路径打开。
+    return false;
   }
 
   // ================ 生命周期 ================
@@ -157,7 +165,7 @@ export class BoardView extends FileView {
   }
 
   override async onClose(): Promise<void> {
-    this.flushSave();
+    await this.flushSave();
     this.gesturesOff?.();
     this.gesturesOff = null;
     this.cardEditor?.destroy();
@@ -171,7 +179,10 @@ export class BoardView extends FileView {
   }
 
   override async onUnloadFile(file: TFile): Promise<void> {
+    this.loadVersion += 1;
+    await this.flushSave();
     await super.onUnloadFile(file);
+    this.loadedFile = null;
     this.doc = null;
     this.selection.clear();
     this.history = [];
@@ -180,15 +191,24 @@ export class BoardView extends FileView {
   // ================ 读写 ================
 
   private get boardFile(): TFile | null {
-    return this.file ?? null;
+    const file = this.file;
+    return file && isBoardPath(file.path) ? file : null;
   }
 
   private async loadBoard(): Promise<void> {
+    const version = ++this.loadVersion;
+    this.loadedFile = null;
+    this.doc = null;
     const file = this.boardFile;
-    if (!file) return;
+    if (!file) {
+      this.render();
+      return;
+    }
     const text = await this.app.vault.cachedRead(file);
+    if (version !== this.loadVersion || file !== this.boardFile) return;
+    this.loadedFile = file;
     this.lastSaved = text;
-    this.doc = parseBoardFile(text);
+    this.doc = this.parseDocument(text);
     this.selection.clear();
     this.history = [];
     this.render();
@@ -196,39 +216,42 @@ export class BoardView extends FileView {
 
   private scheduleSave(): void {
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => this.flushSave(), 250);
+    this.saveTimer = window.setTimeout(() => void this.flushSave(), 250);
   }
 
-  private flushSave(): void {
-    if (this.saveTimer !== null) {
-      window.clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-    void this.save();
+  private async flushSave(): Promise<void> {
+    if (this.saveTimer === null) return;
+    window.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    await this.save();
   }
 
   private async save(): Promise<void> {
     const file = this.boardFile;
     const doc = this.doc;
-    if (!file || !doc) return;
+    if (!file || file !== this.loadedFile || !doc) return;
 
     const next = serializeDoc(doc);
-    if (next === this.lastSaved) return;
+    const previous = this.lastSaved;
+    if (next === previous) return;
 
     let conflict = false;
     await this.app.vault.process(file, (data) => {
-      if (data !== this.lastSaved) {
+      if (!isBoardPath(file.path)) return data;
+      if (data !== previous) {
         conflict = true;
         return data;
       }
       return next;
     });
 
+    if (file !== this.boardFile || doc !== this.doc) return;
     if (conflict) {
       new Notice("看板文件已被外部修改，已重新载入");
       const text = await this.app.vault.read(file);
+      if (file !== this.boardFile || doc !== this.doc) return;
       this.lastSaved = text;
-      this.doc = parseBoardFile(text);
+      this.doc = this.parseDocument(text);
       this.render();
       return;
     }
@@ -240,10 +263,21 @@ export class BoardView extends FileView {
     if (!file) return;
     if (this.editingId || this.saveTimer !== null) return;
     const text = await this.app.vault.cachedRead(file);
+    if (file !== this.boardFile || file !== this.loadedFile) return;
     if (text === this.lastSaved) return;
     this.lastSaved = text;
-    this.doc = parseBoardFile(text);
+    this.doc = this.parseDocument(text);
     this.render();
+  }
+
+  private parseDocument(text: string): BoardDoc | null {
+    try {
+      return parseBoardFile(text);
+    } catch (error) {
+      console.error("看板索引解析失败", error);
+      new Notice("看板索引不是合法 YAML，已暂停编辑；修复文件后重新载入");
+      return null;
+    }
   }
 
   /** 所有结构性改动的唯一入口：先存快照，再落盘，最后重绘。返回是否真的改了。 */
@@ -304,6 +338,15 @@ export class BoardView extends FileView {
       this.render();
     });
 
+    this.archiveEl = toolbar.createEl("button", { cls: "sb-tool", text: "归档箱 0" });
+    this.archiveEl.addEventListener("click", () => {
+      this.commitEdit();
+      this.closeDetail();
+      this.archiveOpen = !this.archiveOpen;
+      this.selection.clear();
+      this.render();
+    });
+
     const undoBtn = toolbar.createEl("button", { cls: "sb-tool", text: "撤销" });
     undoBtn.addEventListener("click", () => this.undo());
 
@@ -316,6 +359,8 @@ export class BoardView extends FileView {
       snapshot: (id) => this.snapshotCard(id),
       applyPatch: (id, patch) => this.applyPatch(id, patch),
       remove: (id) => this.deleteCard(id),
+      archive: (id) => this.setArchived([id], true),
+      restore: (id) => this.setArchived([id], false),
       close: () => this.closeDetail(),
       render: (source, el) => this.renderMarkdown(source, el),
       bodyMode: () => this.plugin.settings.bodyMode,
@@ -475,12 +520,24 @@ export class BoardView extends FileView {
     if (!this.rootEl || !this.columnsEl) return;
     this.renderTitle();
     this.rememberScroll();
-    this.doneEl?.toggleClass("is-active", this.filter.hideDone);
+    this.doneEl?.toggleClass("is-active", this.filter.hideDone && !this.archiveOpen);
+    this.doneEl.disabled = this.archiveOpen;
+    this.archiveEl.setText(this.archiveOpen ? "返回看板" : `归档箱 ${this.doc?.archived.length ?? 0}`);
+    this.archiveEl.toggleClass("is-active", this.archiveOpen);
+    this.searchEl.placeholder = this.archiveOpen ? "搜索归档：标题 / #标签 / 正文" : "筛选：标题 / #标签";
+    this.columnsEl.toggleClass("sb-archive", this.archiveOpen);
 
     const doc = this.doc;
     this.columnsEl.empty();
     if (!doc) {
-      this.columnsEl.createDiv({ cls: "sb-empty", text: "打开一个 .board.md 文件" });
+      this.columnsEl.createDiv({ cls: "sb-empty", text: this.file ? "看板无法读取，请检查 YAML 索引" : "打开一个 .board.md 文件" });
+      return;
+    }
+
+    if (this.archiveOpen) {
+      this.renderArchive(doc);
+      this.renderBatch();
+      if (this.detailOpen) this.cardEditor?.sync();
       return;
     }
 
@@ -568,6 +625,19 @@ export class BoardView extends FileView {
     }
     this.renderTitle();
     this.syncHeaderTitle();
+  }
+
+  private renderArchive(doc: BoardDoc): void {
+    const cards = doc.archived.filter((card) => cardMatches(card, { ...this.filter, hideDone: false }));
+    this.columnsEl.createDiv({ cls: "sb-archive-heading", text: `归档箱 · ${cards.length} / ${doc.archived.length}` });
+    if (!cards.length) this.columnsEl.createDiv({ cls: "sb-empty", text: doc.archived.length ? "没有匹配的归档卡片" : "归档箱是空的" });
+    for (const card of cards) {
+      this.renderCard(this.columnsEl, card);
+      const el = this.columnsEl.lastElementChild as HTMLElement;
+      el.createDiv({ cls: "sb-archive-meta", text: `${card.archivedAt ?? "归档日期未记录"} · ${card.column}` });
+      const restore = el.createEl("button", { cls: "sb-tool sb-archive-restore", text: "恢复" });
+      restore.addEventListener("click", () => this.setArchived([card.id], false));
+    }
   }
 
   private renderColumn(column: string, index: number): void {
@@ -675,8 +745,11 @@ export class BoardView extends FileView {
       btn.addEventListener("click", run);
     };
     const ids = [...this.selection];
-    make("←", "移到左列", () => this.moveAdjacent(ids, -1));
-    make("→", "移到右列", () => this.moveAdjacent(ids, 1));
+    if (!this.archiveOpen) {
+      make("←", "移到左列", () => this.moveAdjacent(ids, -1));
+      make("→", "移到右列", () => this.moveAdjacent(ids, 1));
+    }
+    make(this.archiveOpen ? "恢复" : "归档", "处理所选卡片", () => this.setArchived(ids, !this.archiveOpen));
     make("删除", "删除所选", () => this.removeCards(ids));
     make("取消", "清除选择", () => this.clearSelection());
   }
@@ -823,6 +896,26 @@ export class BoardView extends FileView {
     this.startTitleEdit(card.id);
   }
 
+  private setArchived(ids: string[], archived: boolean): void {
+    this.commitEdit();
+    this.cardEditor?.flush();
+    const doc = this.doc;
+    if (!doc) return;
+    const cards = (archived ? doc.cards : doc.archived).filter((card) => ids.includes(card.id));
+    if (!cards.length) return;
+    if (!archived && !doc.columns.length) {
+      new Notice("请先返回看板新建一列，再恢复卡片");
+      return;
+    }
+    const fallback = !archived && cards.some((card) => !doc.columns.includes(card.column));
+    const count = cards.length;
+    this.selection.clear();
+    if (this.cardEditor?.openCardId && ids.includes(this.cardEditor.openCardId)) this.closeDetail();
+    if (this.mutate(() => archived ? archiveCards(doc, ids) : restoreCards(doc, ids))) {
+      new Notice(`已${archived ? "归档" : "恢复"} ${count} 张卡片，可撤销${fallback ? `；原列已删除的卡片恢复至「${doc.columns[0]}」` : ""}`);
+    }
+  }
+
   private toggleCardDone(id: string): void {
     const doc = this.doc;
     if (!doc) return;
@@ -884,12 +977,18 @@ export class BoardView extends FileView {
       item.setTitle("编辑标题").setIcon("pencil").onClick(() => this.startTitleEdit(id)),
     );
     menu.addSeparator();
-    menu.addItem((item) =>
-      item.setTitle("移到左列").setIcon("arrow-left").onClick(() => this.moveAdjacent(ids, -1)),
-    );
-    menu.addItem((item) =>
-      item.setTitle("移到右列").setIcon("arrow-right").onClick(() => this.moveAdjacent(ids, 1)),
-    );
+    if (!this.archiveOpen) {
+      menu.addItem((item) =>
+        item.setTitle("移到左列").setIcon("arrow-left").onClick(() => this.moveAdjacent(ids, -1)),
+      );
+      menu.addItem((item) =>
+        item.setTitle("移到右列").setIcon("arrow-right").onClick(() => this.moveAdjacent(ids, 1)),
+      );
+    }
+    menu.addItem((item) => item
+      .setTitle(`${this.archiveOpen ? "恢复" : "归档"} ${ids.length} 张卡片`)
+      .setIcon(this.archiveOpen ? "archive-restore" : "archive")
+      .onClick(() => this.setArchived(ids, !this.archiveOpen)));
     menu.addSeparator();
     menu.addItem((item) =>
       item
@@ -933,8 +1032,8 @@ export class BoardView extends FileView {
       }),
     );
     menu.addItem((item) =>
-      item.setTitle("清除本列已完成").setIcon("check").onClick(() => {
-        this.mutate(() => clearDone(doc, column));
+      item.setTitle(`归档本列已完成（${cardsOf(doc, column).filter((card) => card.done).length} 张）`).setIcon("archive").onClick(() => {
+        this.setArchived(cardsOf(doc, column).filter((card) => card.done).map((card) => card.id), true);
       }),
     );
     menu.addSeparator();
@@ -966,6 +1065,8 @@ export class BoardView extends FileView {
       body: card.body,
       tags: card.tags,
       done: card.done,
+      archived: doc.archived.includes(card),
+      archivedAt: card.archivedAt,
       column: card.column,
       columns: doc.columns,
       boardName: file.basename.replace(/\.board$/, ""),
@@ -989,7 +1090,11 @@ export class BoardView extends FileView {
       }
       if (patch.tags !== undefined && setCardTags(card, patch.tags)) changed = true;
       if (patch.column !== undefined && patch.column !== card.column) {
-        changed = moveCards(doc, [card.id], patch.column, null) || changed;
+        if (doc.archived.includes(card) && doc.columns.includes(patch.column)) {
+          card.column = patch.column;
+          card.dirty = true;
+          changed = true;
+        } else changed = moveCards(doc, [card.id], patch.column, null) || changed;
       }
       return changed;
     });
@@ -1019,6 +1124,12 @@ export class BoardView extends FileView {
       card.dirty = true;
       card.persisted = true;
       this.scheduleSave();
+    }
+    const archived = doc.archived.includes(card);
+    if (this.archiveOpen !== archived) {
+      this.archiveOpen = archived;
+      this.selection.clear();
+      this.render();
     }
     this.cardEditor.open(id);
     this.peekEl.addClass("is-open");

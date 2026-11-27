@@ -64,13 +64,45 @@ export function insertCard(doc: BoardDoc, column: string, card: Card): boolean {
   if (!doc.columns.includes(column)) return false;
   card.column = column;
   doc.cards.push(card);
+  doc.bodySections?.push({ id: card.id, text: "", originalBody: "" });
   return true;
 }
 
 export function deleteCards(doc: BoardDoc, ids: string[]): boolean {
-  const before = doc.cards.length;
+  const before = doc.cards.length + doc.archived.length;
   doc.cards = doc.cards.filter((card) => !ids.includes(card.id));
-  return doc.cards.length !== before;
+  doc.archived = doc.archived.filter((card) => !ids.includes(card.id));
+  return doc.cards.length + doc.archived.length !== before;
+}
+
+export function archiveCards(doc: BoardDoc, ids: string[], date = archiveDate()): boolean {
+  const cards = doc.cards.filter((card) => ids.includes(card.id));
+  if (!cards.length) return false;
+  doc.cards = doc.cards.filter((card) => !ids.includes(card.id));
+  for (const card of cards) {
+    card.archivedAt = date;
+    card.dirty = true;
+  }
+  doc.archived.push(...cards);
+  return true;
+}
+
+export function restoreCards(doc: BoardDoc, ids: string[]): boolean {
+  const cards = doc.archived.filter((card) => ids.includes(card.id));
+  if (!cards.length || !doc.columns.length) return false;
+  doc.archived = doc.archived.filter((card) => !ids.includes(card.id));
+  for (const card of cards) {
+    if (!doc.columns.includes(card.column)) card.column = doc.columns[0];
+    card.archivedAt = undefined;
+    card.dirty = true;
+  }
+  doc.cards.push(...cards);
+  return true;
+}
+
+function archiveDate(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
 export function toggleDone(card: Card): void {
@@ -102,7 +134,6 @@ export function setCardBody(card: Card, body: string): boolean {
   const next = body.replace(/\s+$/, "").replace(/^\n+/, "");
   if (next === card.body) return false;
   card.body = next;
-  card.dirty = true;
   return true;
 }
 
@@ -127,7 +158,7 @@ export function renameColumn(doc: BoardDoc, from: string, to: string): boolean {
   const index = doc.columns.indexOf(from);
   if (index < 0 || !name || name === from || doc.columns.includes(name)) return false;
   doc.columns[index] = name;
-  for (const card of cardsOf(doc, from)) {
+  for (const card of [...cardsOf(doc, from), ...doc.archived.filter((card) => card.column === from)]) {
     card.column = name;
     card.dirty = true;
   }

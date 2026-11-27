@@ -1,29 +1,19 @@
-import { FORMAT_VERSION, usedIds, type BoardDoc, type Card } from "./model";
+import { FORMAT_VERSION, type BoardDoc, type BodySection, type Card } from "./model";
 
-/**
- * 文件 → 模型。解析拆成两半：
- * - `splitBoard` 只做切分（结构块、正文段落、孤立段落），纯字符串操作；
- * - `buildDoc` 只做归一（字段校验、补 id、认列），输入是已经解析好的对象。
- *
- * 中间那次 YAML 解析由调用方交给 Obsidian 的 parseYaml，本层不依赖它，
- * 单测可以直接塞对象。
- */
-
-const FENCE_OPEN = /^```ya?ml[ \t]+board[ \t]*$/i;
+const FENCE_OPEN = /^```ya?ml[ \t]+(board|board-archive)[ \t]*$/i;
 const FENCE_CLOSE = /^```[ \t]*$/;
 const CARD_OPEN = /^<!--[ \t]*card[ \t]+([A-Za-z0-9_-]+)[ \t]*-->$/;
 const CARD_CLOSE = /^<!--[ \t]*\/card[ \t]*-->$/;
 const FLOW_CARD = /^\s*-\s*\{.*\}\s*$/;
 
 export interface BoardParts {
-  /** 结构块的 YAML 文本；没有结构块时是 null。 */
   yaml: string | null;
-  /** 卡片 id → 正文。 */
+  archiveYaml: string | null;
   bodies: Map<string, string>;
-  /** 认不出归属的段落，原样保留。 */
   orphans: string[];
-  /** 每张卡片在文件里的原始行，行号与 cards 数组一致。 */
   cardLines: (string | undefined)[];
+  archiveLines: (string | undefined)[];
+  sections: BodySection[];
 }
 
 export function genId(existing: Iterable<string> = []): string {
@@ -35,51 +25,50 @@ export function genId(existing: Iterable<string> = []): string {
 }
 
 export function newCard(column: string, title = "", done = false): Card {
-  return {
-    id: genId(),
-    column,
-    title,
-    tags: [],
-    body: "",
-    done,
-    persisted: false,
-    dirty: true,
-  };
+  return { id: genId(), column, title, tags: [], body: "", done, persisted: false, dirty: true };
 }
 
 export function splitBoard(text: string): BoardParts {
-  const lines = text.split("\n");
+  const lines = text.replace(/^<!--board:guide\n[\s\S]*?\n-->\n?/, "").split("\n");
   const parts: BoardParts = {
-    yaml: null,
-    bodies: new Map(),
-    orphans: [],
-    cardLines: [],
+    yaml: null, archiveYaml: null, bodies: new Map(), orphans: [],
+    cardLines: [], archiveLines: [], sections: [],
   };
-
   const outside: string[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    if (parts.yaml === null && FENCE_OPEN.test(lines[i])) {
-      const start = i + 1;
-      let end = -1;
-      for (let j = start; j < lines.length; j++) {
-        if (FENCE_CLOSE.test(lines[j])) {
-          end = j;
-          break;
+  let inCard = false;
+  let fence: { char: string; length: number } | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!inCard && !fence) {
+      const match = FENCE_OPEN.exec(line);
+      const archive = match?.[1].toLowerCase() === "board-archive";
+      if (match && (archive ? parts.archiveYaml : parts.yaml) === null) {
+        const end = lines.findIndex((candidate, index) => index > i && FENCE_CLOSE.test(candidate));
+        if (end >= 0) {
+          const block = lines.slice(i + 1, end);
+          if (archive) {
+            parts.archiveYaml = block.join("\n");
+            parts.archiveLines = readCardLines(block);
+          } else {
+            parts.yaml = block.join("\n");
+            parts.cardLines = readCardLines(block);
+          }
+          i = end;
+          continue;
         }
       }
-      if (end > start - 1) {
-        const block = lines.slice(start, end);
-        parts.yaml = block.join("\n");
-        parts.cardLines = readCardLines(block);
-        i = end + 1;
-        continue;
-      }
+      if (/^<!--board:(active-end|bodies-start)-->$/.test(line)) continue;
+      if (CARD_OPEN.test(line)) inCard = true;
+    } else if (inCard && !fence && CARD_CLOSE.test(line)) {
+      inCard = false;
     }
-    outside.push(lines[i]);
-    i++;
+    const code = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (code) {
+      if (!fence) fence = { char: code[1][0], length: code[1].length };
+      else if (code[1][0] === fence.char && code[1].length >= fence.length && !code[2].trim()) fence = null;
+    }
+    outside.push(line);
   }
-
   readSections(outside, parts);
   return parts;
 }
@@ -87,99 +76,99 @@ export function splitBoard(text: string): BoardParts {
 function readSections(lines: string[], parts: BoardParts): void {
   let open: { id: string; lines: string[] } | null = null;
   let stray: string[] = [];
-
+  let fence: { char: string; length: number } | null = null;
   const flushStray = (): void => {
+    if (stray.length) parts.sections.push({ text: stray.join("\n") });
     const text = trimBlank(stray).join("\n");
     if (text.trim()) parts.orphans.push(text);
     stray = [];
   };
-
   for (const line of lines) {
-    const openMatch = CARD_OPEN.exec(line);
-    if (openMatch && !open) {
+    const match = !fence ? CARD_OPEN.exec(line) : null;
+    if (match && !open) {
       flushStray();
-      open = { id: openMatch[1], lines: [] };
+      open = { id: match[1], lines: [line] };
       continue;
     }
-    if (CARD_CLOSE.test(line) && open) {
-      parts.bodies.set(open.id, trimBlank(open.lines).join("\n"));
+    if (!fence && CARD_CLOSE.test(line) && open) {
+      const body = trimBlank(open.lines.slice(1)).join("\n");
+      parts.bodies.set(open.id, body);
+      parts.sections.push({ id: open.id, text: [...open.lines, line].join("\n"), originalBody: body });
       open = null;
       continue;
+    }
+    const code = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (code) {
+      if (!fence) fence = { char: code[1][0], length: code[1].length };
+      else if (code[1][0] === fence.char && code[1].length >= fence.length && !code[2].trim()) fence = null;
     }
     if (open) open.lines.push(line);
     else stray.push(line);
   }
-  if (open) stray.push(`<!--card ${open.id}-->`, ...open.lines);
+  if (open) stray.push(...open.lines);
   flushStray();
 }
 
-/** 结构块里每个卡片条目的原始行；块式写法占一行 entry 但不给 raw，保存时按规范重写。 */
+/** 每个 YAML 条目对应一个 raw 槽位，块式条目交给序列化器规范化。 */
 function readCardLines(block: string[]): (string | undefined)[] {
   const start = block.findIndex((line) => /^cards:/.test(line));
   if (start < 0) return [];
-  const out: (string | undefined)[] = [];
-  for (const line of block.slice(start + 1)) {
-    if (!/^\s*-\s/.test(line)) continue;
-    out.push(FLOW_CARD.test(line) ? line : undefined);
-  }
-  return out;
+  const entries = block.slice(start + 1);
+  const indent = entries.find((line) => /^\s*-\s/.test(line))?.match(/^\s*/)?.[0].length;
+  return entries.filter((line) => /^\s*-\s/.test(line) && line.match(/^\s*/)?.[0].length === indent)
+    .map((line) => FLOW_CARD.test(line) ? line : undefined);
 }
 
-export function buildDoc(data: unknown, parts: BoardParts): BoardDoc {
+export function buildDoc(data: unknown, parts: BoardParts, archiveData: unknown = null): BoardDoc {
   const raw = (data ?? {}) as Record<string, unknown>;
   const columns = normalizeColumns(raw.columns);
   const doc: BoardDoc = {
-    version: typeof raw.version === "number" ? raw.version : FORMAT_VERSION,
-    columns,
-    cards: [],
-    orphans: parts.orphans,
+    version: Math.max(FORMAT_VERSION, typeof raw.version === "number" ? raw.version : FORMAT_VERSION),
+    columns, cards: [], archived: [], orphans: [...parts.orphans],
   };
-
-  const seen = usedIds(doc);
+  const seen = new Set<string>();
   const usedBodies = new Set<string>();
-  const list = Array.isArray(raw.cards) ? raw.cards : [];
-  list.forEach((item, index) => {
-    if (!item || typeof item !== "object") return;
-    const record = item as Record<string, unknown>;
-    let id = typeof record.id === "string" ? record.id.trim() : "";
-    const hasId = id !== "" && !seen.has(id);
-    if (!hasId) id = genId(seen);
-    seen.add(id);
-
-    const named = typeof record.column === "string" ? record.column.trim() : "";
-    const fixed = named !== "" && columns.includes(named);
-    const column = fixed ? named : (columns[0] ?? "未命名");
-    if (!fixed && columns.length === 0) columns.push(column);
-
-    const card: Card = {
-      id,
-      column,
-      title: typeof record.title === "string" ? record.title : "",
-      tags: normalizeTags(record.tags),
-      body: parts.bodies.get(id) ?? "",
-      done: record.done === true,
-      persisted: hasId,
-      // 有改动（补 id、纠列）就标脏，保存时按规范重写这一行
-      dirty: !hasId || !fixed,
-      raw: parts.cardLines[index],
-    };
-    doc.cards.push(card);
-    usedBodies.add(id);
+  const readCards = (value: unknown, lines: (string | undefined)[], archived: boolean): Card[] => {
+    const cards: Card[] = [];
+    (Array.isArray(value) ? value : []).forEach((item, index) => {
+      if (!item || typeof item !== "object") return;
+      const record = item as Record<string, unknown>;
+      let id = typeof record.id === "string" ? record.id.trim() : "";
+      const hasId = /^[A-Za-z0-9_-]+$/.test(id) && !seen.has(id);
+      if (!hasId) id = genId(seen);
+      seen.add(id);
+      const named = typeof record.column === "string" ? record.column.trim() : "";
+      const fixed = named !== "" && (archived || columns.includes(named));
+      const column = fixed ? named : (columns[0] ?? "未命名");
+      if (!archived && !fixed && columns.length === 0) columns.push(column);
+      cards.push({
+        id, column, title: typeof record.title === "string" ? record.title : "",
+        tags: normalizeTags(record.tags), body: parts.bodies.get(id) ?? "", done: record.done === true,
+        archivedAt: archived && typeof record.archived_at === "string" ? record.archived_at : undefined,
+        persisted: hasId, dirty: !hasId || !fixed, raw: lines[index],
+      });
+      usedBodies.add(id);
+    });
+    return cards;
+  };
+  doc.cards = readCards(raw.cards, parts.cardLines, false);
+  doc.archived = readCards((archiveData as Record<string, unknown> | null)?.cards, parts.archiveLines, true);
+  doc.bodySections = parts.sections.map((section) => {
+    if (!section.id || usedBodies.has(section.id)) return section;
+    doc.orphans.push(section.text);
+    return { text: section.text };
   });
-
-  // 正文段落找不到对应的卡片（手删了那一行）：原样留着，别在保存时吃掉
-  for (const [id, body] of parts.bodies) {
-    if (usedBodies.has(id)) continue;
-    doc.orphans.push(`<!--card ${id}-->${body ? `\n${body}\n` : "\n"}<!--/card-->`);
+  for (const card of [...doc.cards, ...doc.archived]) {
+    if (!doc.bodySections.some((section) => section.id === card.id)) {
+      doc.bodySections.push({ id: card.id, text: "", originalBody: "" });
+    }
   }
-
   return doc;
 }
 
 function normalizeColumns(value: unknown): string[] {
-  const list = Array.isArray(value) ? value : [];
   const out: string[] = [];
-  for (const item of list) {
+  for (const item of Array.isArray(value) ? value : []) {
     const name = typeof item === "string" ? item.trim() : "";
     if (name && !out.includes(name)) out.push(name);
   }
@@ -187,9 +176,8 @@ function normalizeColumns(value: unknown): string[] {
 }
 
 function normalizeTags(value: unknown): string[] {
-  const list = Array.isArray(value) ? value : [];
   const out: string[] = [];
-  for (const item of list) {
+  for (const item of Array.isArray(value) ? value : []) {
     const tag = typeof item === "string" ? item.trim().replace(/^#/, "") : "";
     if (tag && !out.includes(tag)) out.push(tag);
   }

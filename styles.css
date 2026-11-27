@@ -128,6 +128,43 @@ input.sb-title-edit {
   overflow-y: hidden;
 }
 
+.sb-columns.sb-archive {
+  flex-direction: column;
+  align-items: stretch;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.sb-archive-heading {
+  padding: 4px 0 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.sb-archive .sb-card {
+  flex: 0 0 auto;
+  align-items: center;
+  width: 100%;
+  max-width: 960px;
+  cursor: pointer;
+}
+
+.sb-archive .sb-card-extra {
+  display: none;
+}
+
+.sb-archive-meta {
+  flex: 0 0 auto;
+  max-width: 200px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.sb-archive-restore {
+  flex: 0 0 auto;
+}
+
 .sb-column {
   display: flex;
   flex-direction: column;
